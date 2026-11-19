@@ -132,18 +132,28 @@ export interface ListWindowRect {
   visibleRows: number
 }
 
-/** 一覧窓の矩形。幅は最長の行に合わせ、画面の右端（余白を除く）を越えない */
-export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[]): ListWindowRect {
-  const visibleRows = Math.max(1, Math.min(rows.length, listMaxRows(g)))
+/**
+ * 消費欄に予約する幅 (#1224)。窓の大きさは中身（種類・消費の桁数）で変えない（FF は変えない）。
+ * 消費の最長は魔法の MP 3 桁（「123」）か、どうぐの個数（「×99」）。広い方を常に予約する
+ */
+export const MENU_COST_RESERVE_W = Math.max(
+  estimateTextWidth('999', MENU_FONT_SIZE),
+  estimateTextWidth('×99', MENU_FONT_SIZE)
+)
+
+/**
+ * 一覧窓の矩形。寸法は画面の形 `g` だけで決まり、中身（行数・種類・消費の桁数）に依存しない (#1224)。
+ * 高さは常に `listMaxRows(g)` 行ぶん（行が足りなければ空き行は空白、多ければ▲▼でスクロール）。
+ * 幅は消費欄を固定幅で予約し、画面の右端（余白を除く）を越えない
+ */
+export function computeListWindowRect(g: MenuGeometry): ListWindowRect {
+  const visibleRows = listMaxRows(g)
   const x = Math.max(0, g.command.x - MENU_COMMAND_OVERHANG)
   const maxW = Math.max(0, g.width - (SIDE_PADDING - MENU_COMMAND_OVERHANG) - x)
   // 幅はコマンド窓と同じを基本にする（狭いと窓の外にコマンドの文字がはみ出して見え、広いと味方のステータス欄や絵を覆う）。
   // ただし名前が最低 MENU_NAME_MIN_CHARS 文字ぶん読める幅を下限にする（縦長の画面ではコマンド窓が狭く、消費を引くと名前が残らない）。
   // この場合は味方ステータス欄の名前列に少し重なるが、HP の数字は切らない（avoidX で HP 列の左に止める）。入りきらない名前は buildMenuView が省略する
-  const costW = rows.reduce(
-    (m, r) => Math.max(m, r.cost ? estimateTextWidth(r.cost, MENU_FONT_SIZE) : 0),
-    0
-  )
+  const costW = MENU_COST_RESERVE_W
   // 切り上げる（小数の誤差で、ちょうど MENU_NAME_MIN_CHARS 文字ぶんの幅に 1px 未満届かず省略されるのを防ぐ）
   const need = Math.ceil(
     MENU_PADDING_X * 2 +
@@ -247,7 +257,7 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
     if (w.type === 'list') {
       // 対象選択の間は下の一覧を隠す（敵・味方の絵を覆わない。FF5/6 と同じ）
       if (!active) return
-      const { rect, visibleRows } = computeListWindowRect(g, ctx.rows)
+      const { rect, visibleRows } = computeListWindowRect(g)
       const rows: MenuListView['rows'] = []
       for (let v = 0; v < visibleRows; v++) {
         const index = w.top + v
@@ -360,10 +370,7 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
         { label: SCOPE_TOGGLE_LABELS.single, all: false },
         { label: SCOPE_TOGGLE_LABELS.all, all: true },
       ]
-      const { rect } = computeListWindowRect(
-        g,
-        labels.map((l) => ({ label: l.label, cost: '', disabled: false }))
-      )
+      const { rect } = computeListWindowRect(g)
       const rowRect = (i: number): Rect => ({
         x: rect.x + MENU_PADDING_X + MENU_HAND_SLOT,
         y: rect.y + MENU_PADDING_Y + i * MENU_ROW_HEIGHT,

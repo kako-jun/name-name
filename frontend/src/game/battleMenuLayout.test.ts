@@ -16,6 +16,7 @@ import {
   type BattleItemEntry,
   type BattleSpellEntry,
   type MenuContext,
+  type MenuKind,
 } from './battleMenu'
 import {
   HAND_BITMAP,
@@ -27,7 +28,6 @@ import {
   MENU_COMMAND_OVERHANG,
   MENU_MAX_ROWS,
   MENU_PADDING_Y,
-  MENU_ROW_HEIGHT,
   MENU_SCROLL_STRIP,
   MENU_TOP_GAP,
   buildMenuView,
@@ -230,16 +230,63 @@ describe('画面サイズ総当たり: 一覧窓・手・当たり判定が画�
 })
 
 describe('computeListWindowRect', () => {
-  it('行数が少なければ行数ぶんの高さ、多ければ上限で止まる', () => {
-    const g = geometry(800, 450, 4, 3)
-    const rows = buildMenuRows('spell', manySpells(2), ent('a'))
-    const small = computeListWindowRect(g, rows)
-    expect(small.visibleRows).toBe(2)
-    expect(small.rect.h).toBe(
-      Math.max(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y, g.command.h + 2 * MENU_COMMAND_OVERHANG)
-    )
-    const big = computeListWindowRect(g, buildMenuRows('spell', manySpells(99), ent('a')))
-    expect(big.visibleRows).toBe(listMaxRows(g))
+  it('窓の大きさは中身（行数・種類・消費の桁数）で変わらない (#1224)', () => {
+    const wide = (id: string, mp: number) => ({ id, name: 'まほう' + id, mp, target: '敵単体' })
+    const sets = {
+      spell2: buildMenuRows('spell', [wide('a', 3), wide('b', 5)], ent('a')),
+      spell99: buildMenuRows(
+        'spell',
+        manySpells(99).map((_, i) => wide(String(i), 100 + i)),
+        ent('a')
+      ),
+      item: buildMenuRows('item', manySpells(5), ent('a')),
+      skill: buildMenuRows('skill', manySpells(3), ent('a')),
+      summon: buildMenuRows('summon', manySpells(3), ent('a')),
+      empty: buildMenuRows('spell', [], ent('a')),
+    }
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      const base = computeListWindowRect(g)
+      expect(base.visibleRows).toBe(listMaxRows(g))
+      for (const [kind, rows] of Object.entries(sets)) {
+        const k = (
+          kind === 'spell2' || kind === 'spell99' || kind === 'empty' ? 'spell' : kind
+        ) as MenuKind
+        const ctx: MenuContext = {
+          rows,
+          maxRows: listMaxRows(g),
+          entries: [],
+          party: [ent('a')],
+          enemies: [ent('e')],
+          actorIndex: 0,
+        }
+        const v = buildMenuView(openList(EMPTY_STACK, k, ctx), ctx, g)[0]
+        if (v.type !== 'list') throw new Error()
+        expect(v.rect, `${w}x${h} ${kind}`).toEqual(base.rect)
+      }
+    }
+  })
+
+  it('全体化の切り替え窓も一覧窓と同じ大きさ (#1224)', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      const base = computeListWindowRect(g).rect
+      const spells = [
+        { id: 'a', name: 'ほのお', mp: 1, target: '敵単体', multiTarget: true },
+      ] as BattleSpellEntry[]
+      const ctx: MenuContext = {
+        rows: buildMenuRows('spell', spells, ent('a')),
+        maxRows: listMaxRows(g),
+        entries: spells,
+        party: [ent('a')],
+        enemies: [ent('e')],
+        actorIndex: 0,
+      }
+      const st = confirm(openList(EMPTY_STACK, 'spell', ctx), ctx).stack
+      const t = buildMenuView(st, ctx, g).find((x) => x.type === 'target')
+      if (!t || t.type !== 'target' || !t.toggle) throw new Error('toggle window not built')
+      expect(t.toggle.rect).toEqual(base)
+    }
   })
 
   it('スクロールの有無を moreAbove / moreBelow で示す', () => {
@@ -337,7 +384,7 @@ describe('窓の寸法の取り決め (#204 レビュー)', () => {
   it('一覧窓はコマンド窓より狭くならず（文字がはみ出して見えない）・画面内に収まり、見える行は MENU_MAX_ROWS まで', () => {
     for (const [w, h] of SIZES) {
       const g = geometry(w, h, 4, 3)
-      const r = computeListWindowRect(g, buildMenuRows('spell', manySpells(2), ent('a')))
+      const r = computeListWindowRect(g)
       expect(r.rect.w).toBeGreaterThanOrEqual(g.command.w - EPS)
       expect(inside(r.rect, w, h)).toBe(true)
       expect(listMaxRows(g)).toBeLessThanOrEqual(MENU_MAX_ROWS)
@@ -404,8 +451,8 @@ describe('コマンド窓を覆う高さ', () => {
   it('行が 1 行でも、窓はコマンド窓全体を覆う（コマンドの文字が窓の上に顔を出さない）', () => {
     for (const [w, h] of SIZES) {
       const g = geometry(w, h, 4, 3)
-      for (const n of [1, 3]) {
-        const r = computeListWindowRect(g, buildMenuRows('item', manySpells(n), ent('a'))).rect
+      {
+        const r = computeListWindowRect(g).rect
         // コマンド窓の外形（枠線ぶんまで）を上下左右とも覆う
         expect(r.y).toBeLessThanOrEqual(g.command.y - MENU_COMMAND_OVERHANG + EPS)
         expect(r.y + r.h).toBeGreaterThanOrEqual(
@@ -425,7 +472,7 @@ describe('窓の右端が味方ステータス欄の HP 列の途中で終わら
   for (const [w, h] of SIZES) {
     for (const party of [1, 2, 3, 4]) {
       it(`${w}x${h} 味方${party}: 窓の右端は HP 列の左（消費 1〜3 桁・ATB・最大 HP）`, () => {
-        for (const [atb, maxHp, mp] of [
+        for (const [atb, maxHp] of [
           [false, 30, 3],
           [true, 30, 20],
           [false, 999, 123],
@@ -434,12 +481,7 @@ describe('窓の右端が味方ステータス欄の HP 列の途中で終わら
           [false, 9999, 3],
         ] as const) {
           const g = geometry(w, h, party, 3, { atb, maxHp })
-          const rows = buildMenuRows(
-            'spell',
-            [{ id: 'a', name: 'はいぽーしょん', mp, target: '敵単体' }],
-            ent('a')
-          )
-          const r = computeListWindowRect(g, rows).rect
+          const r = computeListWindowRect(g).rect
           // コマンド窓の外形ぶんは下限として必ず覆う。それを超えて広げるのは HP 列の左まで
           const floor = g.command.x + g.command.w + MENU_COMMAND_OVERHANG
           expect(r.x + r.w).toBeLessThanOrEqual(Math.max(g.avoidX!, floor) + EPS)
