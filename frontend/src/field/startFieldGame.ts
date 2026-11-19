@@ -176,6 +176,7 @@ import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
+import { applyGearStats, removeGearStats, type GearStatDelta } from '../game/gearStats'
 import { ensureFontLoaded } from '../game/FontLoader'
 import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
@@ -888,6 +889,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     : resumed
       ? structuredClone(resumed.equipment)
       : {}
+  // 装備の能力値 (#1234)。partyState は装備を含まない素の値のまま持ち（セーブもこの値）、戦闘に渡す味方とステータスの表示はここで装備を足して作る
+  const gearStatsInput = { shop: config.gearShop, equipment }
+  /** ステータスに出す装備込みの味方（戦闘を始めるときと同じ値） */
+  const equippedParty = (): BattleEntity[] => applyGearStats(partyState, gearStatsInput).party
   let gold = resumed ? resumed.gold : 0
   // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps。全画面メニューを設定したゲームだけ書く）。
   // プレイ時間は FF 同様メニュー中・戦闘中も進み、歩数は歩いたときだけ増える
@@ -902,7 +907,12 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     engine: BattleEngine
     menu: ReturnType<typeof buildBattleMenu>
     background: string | undefined
+    /** 開始時に味方へ足した装備の分 (#1234)。保存・持ち越しのときに引いて素の値へ戻す */
+    gearDeltas: Record<string, GearStatDelta>
   } | null = null
+  /** 戦闘中のエンジンの味方を、装備を引いた素の値で返す (#1234) */
+  const battlePartyWithoutGear = (): BattleEntity[] =>
+    battleRun ? removeGearStats(battleRun.engine.getState().party, battleRun.gearDeltas) : []
   /** 実行時の状態からセーブ形式を作る（戦闘中なら戦闘中状態も含む） */
   const snapshotRpgNow = () => {
     let battleState: RpgResolvedBattle | undefined
@@ -947,7 +957,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     return snapshotRpg(
       {
         // 戦闘に出ていない味方（脚本制御の戦闘）も落とさない
-        party: snapshotParty(partyState, battleRun?.engine.getState().party ?? [], inBattle),
+        // 装備の分は引いて素の値で書く (#1234。再開の戦闘で二重に足さない)
+        party: snapshotParty(partyState, battlePartyWithoutGear(), inBattle),
         inventory: items,
         equipment,
         gold,
@@ -1117,8 +1128,21 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       resolveBattleBackground(config.scenes[sceneId], b.background)
     )
     const open = (): void => {
+      // 装備の能力値を足した味方 (#1234)。脚本制御の戦闘の途中参戦の味方にも同じく足す
+      const start = applyGearStats(eventBattle ? eventBattle.party : partyState, gearStatsInput)
+      const gearDeltas = { ...start.deltas }
+      let script = eventBattle?.script
+      if (script?.joiners) {
+        const joiners: Record<string, BattleEntity> = {}
+        for (const [key, member] of Object.entries(script.joiners)) {
+          const r = applyGearStats([member], gearStatsInput)
+          safeAssign(joiners, key, r.party[0])
+          Object.assign(gearDeltas, r.deltas)
+        }
+        script = { ...script, joiners }
+      }
       const engine = new BattleEngine(
-        (eventBattle ? eventBattle.party : partyState).map((p) => structuredClone(p)),
+        start.party,
         enemies.map((e) => ({ ...e })),
         {
           // 戦利品のログに id でなく表示名を出す (#1126)
@@ -1141,10 +1165,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
             savedBattle
           ),
           // 脚本制御の戦闘 (#1073)。普通の戦闘は script を渡さない（従来どおり）
-          ...(eventBattle ? { script: eventBattle.script } : {}),
+          ...(script ? { script } : {}),
         }
       )
-      battleRun = { engine, menu, background: bg }
+      battleRun = { engine, menu, background: bg, gearDeltas }
       world.visible = false
       fade.visible = false
       app.renderer.resize(b.width, b.height)
@@ -1233,7 +1257,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       earnedGold,
       menuItems: run.menu?.items ?? [],
       loot,
-      partyAfter: run.engine.getState().party,
+      // 装備の分を引いた素の値で書き戻す (#1234。戦闘ごとに加算が積み上がらない。HP の減り・成長・状態は残る)
+      partyAfter: removeGearStats(run.engine.getState().party, run.gearDeltas),
       before: { inventory, gold, party: partyState },
       // 勝利の経験値は生存者へ等分してレベルアップ (#206)。リザルトの表示と同じ関数
       exp,
@@ -1607,6 +1632,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           bgm: false,
           se: () => Object.keys(opts.sounds ?? {}).length > 0,
           getParty: () => partyState,
+          statusParty: equippedParty,
           setParty: (p) => {
             partyState = p
           },
@@ -1709,7 +1735,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
               bandText
             )
             const party: FieldMenuPartyView[] = await Promise.all(
-              partyState.map(async (p) => ({
+              // ステータスは装備込みの値（戦闘の実値と同じ。#1234）
+              equippedParty().map(async (p) => ({
                 id: p.id,
                 name: p.name,
                 hp: p.hp,

@@ -63,6 +63,8 @@ export interface FieldMenuRuntimeDeps {
   bgm: boolean
   se: boolean | (() => boolean)
   getParty(): BattleEntity[]
+  /** ステータスに出す味方（装備の能力値を足した値。戦闘の実値と同じ、#1234）。省略は `getParty()` の値。どうぐ・まほうの計算は `getParty()`（素の値）で行う */
+  statusParty?(): BattleEntity[]
   setParty(party: BattleEntity[]): void
   getInventory(): Record<string, number>
   setInventory(inv: Record<string, number>): void
@@ -163,12 +165,16 @@ export class FieldMenuRuntime {
   }
 
   private partyStats(): FieldMenuPartyStat[] {
-    return this.d.getParty().map((p) => ({
+    // 装備を持ち替えた直後も、ステータスの ちから・まもり・すばやさ が戦闘の実値と同じになる (#1234)
+    return (this.d.statusParty?.() ?? this.d.getParty()).map((p) => ({
       id: p.id,
       hp: p.hp,
       maxHp: p.maxHp,
       mp: p.mp,
       maxMp: p.maxMp,
+      atk: p.atk,
+      def: p.def,
+      agi: p.agi,
       ...(p.level !== undefined ? { level: p.level } : {}),
     }))
   }

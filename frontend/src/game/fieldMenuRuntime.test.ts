@@ -5,6 +5,7 @@ import { DEFAULT_FIELD_MENU_ITEMS } from './fieldMenu'
 import { FieldMenuRuntime, type FieldMenuRuntimeDeps } from './fieldMenuRuntime'
 import { DEFAULT_MENU_TRANSITION } from './fieldMenuTransition'
 import { emptyGearState, type GearShopConfig, type GearState } from './gearShop'
+import { applyGearStats } from './gearStats'
 import type { BattleEntity } from './spellDsl'
 
 const ent = (id: string, over: Partial<BattleEntity> = {}): BattleEntity => ({
@@ -396,5 +397,74 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     const { rt, state } = gearSetup()
     expect(rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!.ok).toBe(true)
     expect(state.inventory.potion).toBe(1)
+  })
+})
+
+describe('ステータスの表示値 = 戦闘の実値 (#1234)', () => {
+  const cfg: GearShopConfig = {
+    multiplier: 2,
+    entries: [
+      { id: 'quick', kind: 'blade', owner: 'a', basePrice: 100, equipBonus: 'agi+4, atk+2' },
+      { id: 'vest', kind: 'armor', price: 50, equipBonus: 'def+3, hp+10' },
+    ],
+  }
+  /** 一枚絵フィールド（startFieldGame）と同じ配線: 素の値は getParty、ステータスは装備を足した statusParty */
+  function wired() {
+    const g = {
+      state: emptyGearState() as GearState,
+      gold: 1000,
+      equipment: {} as Record<string, string[]>,
+    }
+    // 素の値の正本（setup の state）は setup の後で決まるので、表示の関数からは後で参照する
+    let party: () => BattleEntity[] = () => []
+    const battleParty = () => applyGearStats(party(), { shop: cfg, equipment: g.equipment })
+    const r = setup({
+      statusParty: () => battleParty().party,
+      getEquipment: () => g.equipment,
+      gear: {
+        cfg,
+        getState: () => g.state,
+        setState: (s) => (g.state = s),
+        getGold: () => g.gold,
+        setGold: (n) => (g.gold = n),
+        getFlags: () => ({}),
+        setEquipment: (m, l) => (g.equipment[m] = l),
+      },
+    })
+    party = () => r.state.party
+    return { ...r, g, battleParty }
+  }
+
+  it('持ち替えた直後の ちから・まもり・すばやさ・HP は、戦闘に渡す値と同じ。素の値（getParty）は変わらない', () => {
+    const { rt, state, battleParty } = wired()
+    rt.use({ screen: 'appstore', entryId: 'quick', casterId: 'a' })
+    rt.use({ screen: 'appstore', entryId: 'vest', casterId: 'a' })
+    rt.use({ screen: 'equip', entryId: 'quick', casterId: 'a' })
+    const out = rt.use({ screen: 'equip', entryId: 'vest', casterId: 'a' })!
+    const shown = out.party!.find((p) => p.id === 'a')!
+    const inBattle = battleParty().party.find((p) => p.id === 'a')!
+    expect(shown).toMatchObject({ atk: 3, def: 4, agi: 5, hp: 20, maxHp: 50 })
+    expect(shown).toMatchObject({
+      atk: inBattle.atk,
+      def: inBattle.def,
+      agi: inBattle.agi,
+      hp: inBattle.hp,
+      maxHp: inBattle.maxHp,
+    })
+    expect(state.party[0]).toMatchObject({ atk: 1, def: 1, agi: 1, hp: 10, maxHp: 40 })
+  })
+
+  it('どうぐの回復は素の値で計算し、表示は装備込みの値', () => {
+    const { rt, state, g } = wired()
+    g.equipment.a = ['vest']
+    const out = rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!
+    expect(state.party[0]).toMatchObject({ hp: 30, maxHp: 40 })
+    expect(out.party!.find((p) => p.id === 'a')).toMatchObject({ hp: 40, maxHp: 50, def: 4 })
+  })
+
+  it('statusParty を渡さなければ getParty の値（従来どおり）', () => {
+    const { rt } = setup()
+    const out = rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!
+    expect(out.party!.find((p) => p.id === 'a')).toMatchObject({ hp: 30, maxHp: 40, atk: 1 })
   })
 })
