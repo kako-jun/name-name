@@ -304,6 +304,48 @@ describe('diffEntity', () => {
     expect(diffEntity(e, hero('party1'))).toEqual({ id: 'party1', hp: 3 })
     expect(Object.keys(diffEntity(e, undefined))).toContain('sprite')
   })
+  it('hp > maxHp（mp > maxMp）の者は、マスターと同じ値でも maxHp（maxMp）を必ず書く (#1234)', () => {
+    const e = hero('party1', { hp: 50, mp: 9 })
+    expect(diffEntity(e, hero('party1'))).toEqual({
+      id: 'party1',
+      hp: 50,
+      maxHp: 40,
+      mp: 9,
+      maxMp: 6,
+    })
+    // 最大値以下なら従来どおり書かない
+    expect(diffEntity(hero('party1', { hp: 40 }), hero('party1'))).toEqual({ id: 'party1' })
+  })
+})
+
+describe('最大 HP / MP の持ち上げ (#1234)', () => {
+  const resolveParty = (patch: RpgSaveState['party'][number]) =>
+    resolveRpg(
+      { version: RPG_SAVE_VERSION, party: [patch], items: {}, equipment: {}, gold: 0 },
+      base
+    ).party[0]
+
+  it('差分に maxHp / maxMp があれば持ち上げず、書いた値のまま（hp が maxHp を超えてよい）', () => {
+    expect(resolveParty({ id: 'party1', hp: 50, maxHp: 40, mp: 9, maxMp: 6 })).toMatchObject({
+      hp: 50,
+      maxHp: 40,
+      mp: 9,
+      maxMp: 6,
+    })
+  })
+  it('hp / mp だけ書いた従来のセーブは、従来どおり maxHp / maxMp を hp / mp まで持ち上げる', () => {
+    expect(resolveParty({ id: 'party1', hp: 50, mp: 9 })).toMatchObject({
+      hp: 50,
+      maxHp: 50,
+      mp: 9,
+      maxMp: 9,
+    })
+  })
+  it('snapshotRpg → resolveRpg で hp > maxHp の者が往復する', () => {
+    const party = [hero('party1', { hp: 50, mp: 9 })]
+    const save = snapshotRpg({ party, inventory: {}, equipment: {}, gold: 0 }, base)
+    expect(resolveRpg(save, base).party[0]).toMatchObject({ hp: 50, maxHp: 40, mp: 9, maxMp: 6 })
+  })
 })
 
 describe('buildRpgSaveSlot / parseResumeParam', () => {
