@@ -1,6 +1,6 @@
 /**
  * BattleScreen の battle_target_cursor (#1189): `ff` は対象を手だけで指し（▼ を出さない）、敵名ウィンドウの対象の行を強調し、
- * 番の味方は頭上の ▼ だけで示す（対象選択の間も出したまま。名前の左の ▶・▷ を出さない）。未指定は従来どおり
+ * 番の味方は頭上の ▼ と名前の左の ▶ で示す（対象選択の間も出したまま。▷ は出さない。front は ▼ が出ないので ▶ も出さない）。未指定は従来どおり
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Container, Text } from 'pixi.js'
@@ -127,14 +127,28 @@ describe('battle_target_cursor: 番の印 (#1189)', () => {
     expect(marks(s).party).toEqual([true, false])
     expect(I(s).atbMarkers[0].visible).toBe(true)
   })
-  it('ff: 番の味方は頭上の ▼ だけ（▶ は出さない）', () => {
-    const { s } = build({ targetCursor: 'ff' }, true)
-    expect(marks(s).party).toEqual([true, false])
-    expect(I(s).atbMarkers.every((m) => !m.visible)).toBe(true)
-  })
-  it('ff: タップで番を移せる味方の ▷ も出さない（切り替えのタップ自体は効く）', () => {
+  it('ff: 番の味方に ▶ が ▼ と同時に出る・対象選択中も出たまま・▷ は出ない', () => {
     const { s } = build({ targetCursor: 'ff', atbSwitch: true }, true)
-    expect(I(s).atbMarkers.every((m) => !m.visible)).toBe(true)
+    const vis = () => I(s).atbMarkers.map((m) => m.visible)
+    expect(marks(s).party).toEqual([true, false])
+    expect(vis()).toEqual(marks(s).party)
+    expect(I(s).atbMarkers[0].text).toBe('▶')
+    openTarget(1)
+    press('ArrowDown')
+    expect(marks(s).party).toEqual([true, false])
+    expect(vis()).toEqual(marks(s).party)
+    expect(I(s).atbMarkers.every((m) => !m.visible || m.text === '▶')).toBe(true)
+  })
+  it('ff + front: 頭上の ▼ が出ないので ▶ も出さない（off + front は従来どおり ▶）', () => {
+    const ff = build({ targetCursor: 'ff', layout: 'front' }, true)
+    expect(I(ff.s).atbMarkers[0].visible).toBe(false)
+    const off = build({ layout: 'front' }, true)
+    expect(I(off.s).atbMarkers[0].visible).toBe(true)
+  })
+  it('ff: タップで番を移せる味方の ▷ は出さない（切り替えのタップ自体は効く）', () => {
+    const { s, engine } = build({ targetCursor: 'ff', atbSwitch: true }, true)
+    expect(engine.isAtbSwitchable(1)).toBe(true)
+    expect(I(s).atbMarkers.some((m) => m.visible && m.text === '▷')).toBe(false)
   })
 })
 

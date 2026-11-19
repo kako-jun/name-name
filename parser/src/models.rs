@@ -2710,7 +2710,7 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側（`normalizeBattleAtbSwitch`）で `on` 以外を `off` にする。ターン制（ATB でない戦闘）では何もしない。GUI 専用。frontmatter `battle_atb_switch:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_atb_switch: Option<String>,
-    /// 戦闘の対象選択・番の印の出し方 (#1189)。`off`（既定・従来）/ `ff`（FF 式: 対象は手のカーソルだけで指し〔手は敵の左から右向き〕、敵名窓の対象の行は明るい帯で強調して手は出さない。番の印は頭上の ▼ だけ）。
+    /// 戦闘の対象選択・番の印の出し方 (#1189)。`off`（既定・従来）/ `ff`（FF 式: 対象は手のカーソルだけで指し〔手は敵の左から右向き〕、敵名窓の対象の行は明るい帯で強調して手は出さない。番は頭上の ▼ と名前の左の ▶ で示し、▷ は出さない。side のみ）。
     /// 値は生文字列で透過し、runtime 側（`normalizeBattleTargetCursor`）で不正値を警告して `off` にする。GUI 専用。frontmatter `battle_target_cursor:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_target_cursor: Option<String>,

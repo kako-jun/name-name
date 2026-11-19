@@ -851,9 +851,7 @@ describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)'
     const geo = (s as unknown as { menuGeometry: import('./battleMenuLayout').MenuGeometry })
       .menuGeometry
     expect(geo.avoidX).toBeGreaterThan(geo.command.x + geo.command.w)
-    const r = computeListWindowRect(geo, [
-      { label: 'ながいなまえのじゅもん', cost: '123', disabled: false },
-    ]).rect
+    const r = computeListWindowRect(geo).rect
     expect(r.x + r.w).toBeLessThanOrEqual(geo.avoidX! + 0.001)
   })
 })
