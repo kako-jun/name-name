@@ -3139,8 +3139,9 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
     const g = computeAcrylicGeometry(1, 1, box, DEFAULT_ACRYLIC_PARAMS)
     return Math.max(g.shadow?.rx ?? 0, g.base?.rx ?? 0)
   }
-  // 画面ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 配置で 2〜4 秒かかり、並行実行や他のプロセスの負荷で
-  // 既定の 5 秒を超えて時間切れで落ちていた（配置は純関数で、結果は毎回同じ）。総当たりの組み合わせは分ける前と同じ
+  // 画面 × 味方の人数ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 配置で 2〜4 秒かかり、並行実行や他のプロセスの負荷で
+  // 既定の 5 秒を超えて時間切れで落ちていた（配置は純関数で、結果は毎回同じ）。画面ごとだけでは大きい画面が重い負荷で
+  // 3.6 秒まで出たので、人数でも分ける（1 本 144 配置）。総当たりの組み合わせは分ける前と同じ
   // 3 つ目は「その画面で敵名窓が置けるか」。縦長・小さい画面は置けず全部 continue になるので、画面ごとに空振りを見る
   // （分ける前は全画面の合計件数 > 100 で見ていて、1 画面だけ置けなくなっても気づけなかった）
   const S3_ROWS: Array<[number, number, boolean]> = [
@@ -3156,51 +3157,51 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
   it('画面の一覧は SWEEP_SIZES + 1600x1080 と同じ', () => {
     expect(S3_ROWS.map(([w, h]) => [w, h])).toEqual([...SWEEP_SIZES, [1600, 1080]])
   })
-  it.each(S3_ROWS)(
-    '%dx%d（敵名窓が置ける: %s）: 描画範囲どうしの隙間が 0 より大きい（味方1〜4人 × 隊列 × 敵数 × 縦横比 × 重なり × コマンド数 × ff/dq）',
-    (w, h, placeable) => {
+  it.each(
+    S3_ROWS.flatMap(([w, h, placeable]) =>
+      [1, 2, 3, 4].map((partyCount) => [w, h, partyCount, placeable] as const)
+    )
+  )(
+    '%dx%d 味方%d人（敵名窓が置ける: %s）: 描画範囲どうしの隙間が 0 より大きい（隊列 × 敵数 × 縦横比 × 重なり × コマンド数 × ff/dq）',
+    (w, h, partyCount, placeable) => {
       let checked = 0
-      for (const partyCount of [1, 2, 3, 4]) {
-        for (const back of [false, true]) {
-          for (const enemyCount of [1, 3, 6]) {
-            for (const aspect of [0.6, 1.6]) {
-              for (const messageLines of [undefined, 1]) {
-                for (const ov of [0, 0.25, 0.5]) {
-                  for (const commandCount of [2, 4]) {
-                    const L = computeSideBattleLayout({
-                      width: w,
-                      height: h,
-                      partyCount,
-                      enemyCount,
-                      enemyList: true,
-                      commandCount,
-                      enemyWindowOverlap: ov,
-                      partyRows: Array.from({ length: partyCount }, (_, i) =>
-                        back && i % 2 === 1 ? 'back' : 'front'
-                      ),
-                      enemyAspects: Array(enemyCount).fill(aspect),
-                      enemyAcrylic: DEFAULT_ACRYLIC_PARAMS,
-                      partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
-                      ...(messageLines ? { messageLines } : {}),
-                    })
-                    if (!L.enemyList) continue
-                    const enemyRight = Math.max(
-                      ...L.enemies.map((e) => e.x + e.width / 2 + half(e))
-                    )
-                    const partyLeft = Math.min(...L.party.map((p) => p.x + p.width / 2 - half(p)))
-                    expect(
-                      partyLeft - enemyRight,
-                      `${w}x${h} p${partyCount} e${enemyCount}`
-                    ).toBeGreaterThan(0)
-                    checked++
-                  }
+      for (const back of [false, true]) {
+        for (const enemyCount of [1, 3, 6]) {
+          for (const aspect of [0.6, 1.6]) {
+            for (const messageLines of [undefined, 1]) {
+              for (const ov of [0, 0.25, 0.5]) {
+                for (const commandCount of [2, 4]) {
+                  const L = computeSideBattleLayout({
+                    width: w,
+                    height: h,
+                    partyCount,
+                    enemyCount,
+                    enemyList: true,
+                    commandCount,
+                    enemyWindowOverlap: ov,
+                    partyRows: Array.from({ length: partyCount }, (_, i) =>
+                      back && i % 2 === 1 ? 'back' : 'front'
+                    ),
+                    enemyAspects: Array(enemyCount).fill(aspect),
+                    enemyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+                    partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+                    ...(messageLines ? { messageLines } : {}),
+                  })
+                  if (!L.enemyList) continue
+                  const enemyRight = Math.max(...L.enemies.map((e) => e.x + e.width / 2 + half(e)))
+                  const partyLeft = Math.min(...L.party.map((p) => p.x + p.width / 2 - half(p)))
+                  expect(
+                    partyLeft - enemyRight,
+                    `${w}x${h} p${partyCount} e${enemyCount}`
+                  ).toBeGreaterThan(0)
+                  checked++
                 }
               }
             }
           }
         }
       }
-      expect(checked > 0, `${w}x${h} 敵名窓が置けた件数 ${checked}`).toBe(placeable)
+      expect(checked > 0, `${w}x${h} p${partyCount} 敵名窓が置けた件数 ${checked}`).toBe(placeable)
     }
   )
 })
