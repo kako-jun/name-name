@@ -48,7 +48,7 @@ npx wrangler deploy
 
 ```bash
 curl https://name-name-api.kako-jun.workers.dev/api/projects
-# → 4 件のプロジェクト一覧が JSON で返る
+# → プロジェクト一覧が JSON で返る（正本は worker/src/projects.ts の固定配列。並びもその順で、先頭は sit-by-me）
 ```
 
 ## 2. CF Pages のデプロイ（フロント）

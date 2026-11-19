@@ -132,7 +132,24 @@ describe("sit-by-me の登録 (#1135, scriptsDir は #1144)", () => {
     const body = (await res.json()) as { projects: Array<{ name: string }> };
     const names = body.projects.map((x) => x.name);
     expect(names[0]).toBe("sit-by-me");
-    expect(names[1]).toBe("ogurasia");
-    expect(names.indexOf("theo-hayami")).toBeLessThan(names.indexOf("treppenwitz"));
+    expect(names.slice(1)).toEqual([
+      "ogurasia",
+      "attama",
+      "skirts-colour",
+      "friday-1930",
+      "gymnasia",
+      "llll-ll-media",
+      "amanuma",
+      "cee-lo-rings",
+      "anomaly2-corona-road",
+      "tacojiman",
+      "endroll-jumpers",
+      "yatagarrage",
+      "legend-of-window-ninja",
+      "elevator-gurl",
+      "the-peeple",
+      "theo-hayami",
+      "treppenwitz",
+    ]);
   });
 });
