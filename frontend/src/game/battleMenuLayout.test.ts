@@ -239,7 +239,14 @@ describe('computeListWindowRect', () => {
         manySpells(99).map((_, i) => wide(String(i), 100 + i)),
         ent('a')
       ),
-      item: buildMenuRows('item', manySpells(5), ent('a')),
+      item: buildMenuRows(
+        'item',
+        [
+          { id: 'i1', name: 'ポーション', effect: 'heal 5..5', count: 1 },
+          { id: 'i2', name: 'エーテル', effect: 'heal 5..5', count: 99 },
+        ] as BattleItemEntry[],
+        ent('a')
+      ),
       skill: buildMenuRows('skill', manySpells(3), ent('a')),
       summon: buildMenuRows('summon', manySpells(3), ent('a')),
       empty: buildMenuRows('spell', [], ent('a')),
@@ -264,6 +271,37 @@ describe('computeListWindowRect', () => {
         if (v.type !== 'list') throw new Error()
         expect(v.rect, `${w}x${h} ${kind}`).toEqual(base.rect)
       }
+    }
+  })
+
+  it('3 文字を超える消費（×100・MP 1000）でも窓は広がらず、その行の名前だけが短くなる (#1224)', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      const base = computeListWindowRect(g).rect
+      const view = (rows: ReturnType<typeof buildMenuRows>) => {
+        const ctx: MenuContext = {
+          rows,
+          maxRows: listMaxRows(g),
+          entries: [],
+          party: [ent('a')],
+          enemies: [ent('e')],
+          actorIndex: 0,
+        }
+        const v = buildMenuView(openList(EMPTY_STACK, 'item', ctx), ctx, g)[0]
+        if (v.type !== 'list') throw new Error()
+        return v
+      }
+      const mk = (count: number): BattleItemEntry[] => [
+        { id: 'i', name: 'ながいなまえのどうぐ', effect: 'heal 5..5', count },
+      ]
+      const small = view(buildMenuRows('item', mk(1), ent('a')))
+      const big = view(buildMenuRows('item', mk(9999), ent('a')))
+      expect(big.rect).toEqual(base)
+      expect(small.rect).toEqual(base)
+      const r = big.rows[0]
+      expect(r.label.length).toBeLessThanOrEqual(small.rows[0].label.length)
+      // 名前（と消費）は窓の中に収まる
+      expect(r.rect.x + r.rect.w).toBeLessThanOrEqual(base.x + base.w + EPS)
     }
   })
 
@@ -473,12 +511,12 @@ describe('窓の右端が味方ステータス欄の HP 列の途中で終わら
     for (const party of [1, 2, 3, 4]) {
       it(`${w}x${h} 味方${party}: 窓の右端は HP 列の左（消費 1〜3 桁・ATB・最大 HP）`, () => {
         for (const [atb, maxHp] of [
-          [false, 30, 3],
-          [true, 30, 20],
-          [false, 999, 123],
-          [true, 999, 20],
-          [true, 9999, 123],
-          [false, 9999, 3],
+          [false, 30],
+          [true, 30],
+          [false, 999],
+          [true, 999],
+          [true, 9999],
+          [false, 9999],
         ] as const) {
           const g = geometry(w, h, party, 3, { atb, maxHp })
           const r = computeListWindowRect(g).rect

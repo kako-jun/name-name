@@ -134,7 +134,9 @@ export interface ListWindowRect {
 
 /**
  * 消費欄に予約する幅 (#1224)。窓の大きさは中身（種類・消費の桁数）で変えない（FF は変えない）。
- * 消費の最長は魔法の MP 3 桁（「123」）か、どうぐの個数（「×99」）。広い方を常に予約する
+ * 消費は 3 文字（魔法の MP 3 桁「123」、どうぐの個数「×99」）までを想定し、広い方を常に予約する。
+ * 消費の値に上限はなく、これより長い消費（「×100」・MP 1000 など）は窓を広げず、その行の名前が `buildMenuView` の `fitLabel` で短くなる
+ * （窓の大きさが固定なのが仕様。FF と同じ）
  */
 export const MENU_COST_RESERVE_W = Math.max(
   estimateTextWidth('999', MENU_FONT_SIZE),
