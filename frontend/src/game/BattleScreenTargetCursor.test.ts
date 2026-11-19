@@ -146,7 +146,8 @@ describe('battle_target_cursor: 番の印 (#1189)', () => {
     expect(I(off.s).atbMarkers[0].visible).toBe(true)
   })
   it('ff: タップで番を移せる味方の ▷ は出さない（切り替えのタップ自体は効く）', () => {
-    const { s } = build({ targetCursor: 'ff', atbSwitch: true }, true)
+    const { s, engine } = build({ targetCursor: 'ff', atbSwitch: true }, true)
+    expect(engine.isAtbSwitchable(1)).toBe(true)
     expect(I(s).atbMarkers.some((m) => m.visible && m.text === '▷')).toBe(false)
   })
 })
