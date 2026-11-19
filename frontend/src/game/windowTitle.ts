@@ -10,7 +10,7 @@ export const PANEL_CORNER_RADIUS = 6
 export const WINDOW_TITLE_LEFT = 16
 /** 題名の文字の左右に空ける線の切れ目の余白 (px) */
 export const WINDOW_TITLE_PAD = 6
-/** 題名の文字の大きさ。一覧の行と同じ大きさにそろえる */
+/** 題名の文字の大きさ。窓の中の文字（行は 16）より小さくして、枠線の高さに収める */
 export const WINDOW_TITLE_FONT_SIZE = 12
 
 /** 上辺の線の切れ目（画面の x 座標。`x0` から `x1` まで線を描かない） */
@@ -28,6 +28,18 @@ export interface WindowTitlePlacement {
   textW: number
   /** 切れ目。窓が狭くて文字が入らないときは null（題名を出さない） */
   gap: PanelGap | null
+}
+
+/** 題名の文字の幅。概算と実測（`measured`。取れない環境は例外か非有限）の大きい方 */
+export function titleTextWidth(text: string, measured?: () => number): number {
+  const est = estimateTextWidth(text, WINDOW_TITLE_FONT_SIZE)
+  if (!measured) return est
+  try {
+    const w = measured()
+    return Number.isFinite(w) ? Math.max(est, w) : est
+  } catch {
+    return est
+  }
 }
 
 /**

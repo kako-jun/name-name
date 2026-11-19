@@ -1869,6 +1869,8 @@ describe('BattleScreen: windowStyle (#744)', () => {
       })
 
       it('コマンド窓は題名（指示を出す味方の名前）のぶん上辺の枠線だけが切れ、背景・窓の大きさは変わらない (#1226)', () => {
+        // front は題名を出さない（隙間が狭く上の窓に重なるため）。枠は閉じた角丸のまま
+        if (opts.layout !== 'side') return
         const dark = build(darkOpts)
         const s = build(opts)
         const frame = strokeOps(frameOf(pi(s).commandPanel))
@@ -1887,7 +1889,9 @@ describe('BattleScreen: windowStyle (#744)', () => {
       it('指示を出す味方がいる間だけ、コマンド窓に題名として名前が載る (#1226)', () => {
         const s = build(opts)
         const title = (pi(s) as unknown as { commandTitle: PixiText }).commandTitle
-        expect(title.visible).toBe(true)
+        // front は題名を出さない（隙間が狭く上の窓に重なるため）
+        expect(title.visible).toBe(opts.layout === 'side')
+        if (opts.layout !== 'side') return
         expect(title.text).toBe('HERO')
         expect(title.eventMode).toBe('none')
       })

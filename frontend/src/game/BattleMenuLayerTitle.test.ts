@@ -2,8 +2,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import 'pixi.js/events'
 import { Container, Text as PixiText, TextStyle } from 'pixi.js'
-import { BattleMenuLayer, type BattleMenuHost } from './BattleMenuLayer'
-import type { MenuListView } from './battleMenuLayout'
+import { BattleMenuLayer, SCOPE_TOGGLE_TITLE, type BattleMenuHost } from './BattleMenuLayer'
+import type { MenuTargetView, MenuListView } from './battleMenuLayout'
 import { PANEL_CORNER_RADIUS } from './windowTitle'
 
 const view: MenuListView = {
@@ -68,5 +68,27 @@ describe('BattleMenuLayer: 一覧窓の題名 (#1226)', () => {
       expect((h.drawPanel as ReturnType<typeof vi.fn>).mock.calls[0][6]).toBeNull()
       layer.destroy({ children: true })
     }
+  })
+
+  it('全体化の切り替え窓にも題名が載り、窓の rect は変わらない', () => {
+    const draw = vi.fn()
+    const layer = new BattleMenuLayer(host(draw))
+    const rect = { x: 20, y: 200, w: 220, h: 80 }
+    const tv: MenuTargetView = {
+      type: 'target',
+      hands: [],
+      hits: [],
+      toggle: {
+        rect,
+        rows: [],
+        hand: { x: 24, y: 210, facing: 'right' },
+      },
+    }
+    layer.update([tv], 800, 450)
+    const [, x, y, w, h, , gap] = draw.mock.calls[0]
+    expect([x, y, w, h]).toEqual([20, 200, 220, 80])
+    expect(gap).not.toBeNull()
+    expect(texts(layer).some((t) => t.text === SCOPE_TOGGLE_TITLE && t.y === 200)).toBe(true)
+    layer.destroy({ children: true })
   })
 })

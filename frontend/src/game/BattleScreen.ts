@@ -273,6 +273,7 @@ import { applyVictoryExp, type LevelUpDef } from './levelUp'
 import {
   PANEL_CORNER_RADIUS,
   placeWindowTitle,
+  titleTextWidth,
   WINDOW_TITLE_FONT_SIZE,
   type PanelGap,
   type WindowTitlePlacement,
@@ -926,6 +927,8 @@ export class BattleScreen extends Container {
   private commandTitle: PixiText | null = null
   private commandRect: { x: number; y: number; w: number; h: number } | null = null
   private commandTitleKey = ''
+  /** 候補窓（一覧・全体化の窓）がコマンド窓の上に出ている間 true。題名が窓の上辺からはみ出して透けないよう隠す */
+  private commandCovered = false
   private logPanel: Container
   /** ff-blue パネルの子 Graphics（帯・mask・枠）。makePanel が 1 組だけ作り、drawPanel が使い回す */
   private ffBlueParts = new WeakMap<
@@ -1893,7 +1896,9 @@ export class BattleScreen extends Container {
   /** コマンド窓の題名にする名前。いま指示を出している味方（コマンド待ちのとき）。いなければ空＝題名なし */
   private commandTitleName(): string {
     const s = this.engine.getState()
-    if (s.phase !== 'party-input') return ''
+    // front は上のステータス窓との隙間が PANEL_GAP(6px) しかなく、題名が窓の枠・ATB の棒に重なるので出さない（番の味方はステータス窓の ▶ で分かる）
+    if (this.layoutMode === 'front') return ''
+    if (s.phase !== 'party-input' || this.commandCovered) return ''
     return s.party[this.engine.getCurrentActorIndex()]?.name ?? ''
   }
 
@@ -1919,15 +1924,13 @@ export class BattleScreen extends Container {
 
   /** 題名の文字の幅（概算と実測の大きい方。計測が取れない環境は概算） */
   private measure(text: string): number {
-    const t = this.commandTitle
-    const est = estimateTextWidth(text, WINDOW_TITLE_FONT_SIZE)
-    if (!t) return est
-    try {
-      t.text = text
-      return Number.isFinite(t.width) ? Math.max(est, t.width) : est
-    } catch {
-      return est
-    }
+    return titleTextWidth(text, () => {
+      const probe = new PixiText({ text, style: this.themedStyle(TEXT_STYLE_COMMAND) })
+      probe.style.fontSize = WINDOW_TITLE_FONT_SIZE
+      const w = probe.width
+      probe.destroy()
+      return w
+    })
   }
 
   /** 指示を出す味方が変わったら題名を描き直す */
@@ -3372,6 +3375,11 @@ export class BattleScreen extends Container {
           })
         : ''
     this.menuLayer.update(view, this.screenWidth, this.screenHeight, hint)
+    // 窓がコマンド窓に重なっている間は、コマンド窓の題名（味方の名前）を隠す (#1226)
+    if (view.length > 0 !== this.commandCovered) {
+      this.commandCovered = view.length > 0
+      this.drawCommandPanel()
+    }
     this.updateSelectMarks()
     // 他の表示物（ログ行など）が後から足されても、窓は常に最前面
     this.addChild(this.menuLayer)

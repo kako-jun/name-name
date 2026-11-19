@@ -27,6 +27,7 @@ import { estimateTextWidth } from './battleLayout'
 import {
   PANEL_CORNER_RADIUS,
   placeWindowTitle,
+  titleTextWidth,
   WINDOW_TITLE_FONT_SIZE,
   type PanelGap,
   type WindowTitlePlacement,
@@ -72,6 +73,8 @@ export interface BattleMenuHost {
   onCancelTap(x: number, y: number): void
 }
 
+/** 全体化の切り替え窓の題名 (#1226)。操作の案内（battleMenu.ts の「↑↓: たいしょう」）と同じ語 */
+export const SCOPE_TOGGLE_TITLE = 'たいしょう'
 const ROW_COLOR = 0xffffff
 const ROW_DISABLED_COLOR = 0x808080
 /** 一番上でない窓（下に隠れた一覧）を暗く描く */
@@ -488,16 +491,13 @@ export class BattleMenuLayer extends Container {
   }
 
   private titleWidth(text: string): number {
-    const est = estimateTextWidth(text, WINDOW_TITLE_FONT_SIZE)
-    if (text === '') return est
-    try {
+    if (text === '') return 0
+    return titleTextWidth(text, () => {
       const probe = new PixiText({ text, style: this.styled(ROW_COLOR, WINDOW_TITLE_FONT_SIZE) })
       const w = probe.width
       probe.destroy()
-      return Number.isFinite(w) ? Math.max(est, w) : est
-    } catch {
-      return est
-    }
+      return w
+    })
   }
 
   /** 文字の幅。概算と実測（取れる環境だけ）の大きい方 (#1183。末尾が切れないように) */
@@ -543,7 +543,14 @@ export class BattleMenuLayer extends Container {
     win.eventMode = 'static'
     const panel = this.host.makePanel()
     win.addChild(panel)
-    this.host.drawPanel(panel, t.rect.x, t.rect.y, t.rect.w, t.rect.h, true)
+    const place = placeWindowTitle(
+      t.rect,
+      SCOPE_TOGGLE_TITLE,
+      PANEL_CORNER_RADIUS,
+      this.titleWidth(SCOPE_TOGGLE_TITLE)
+    )
+    this.host.drawPanel(panel, t.rect.x, t.rect.y, t.rect.w, t.rect.h, true, place?.gap ?? null)
+    if (place) win.addChild(this.windowTitle(SCOPE_TOGGLE_TITLE, place))
     for (const row of t.rows) {
       const label = new PixiText({
         text: row.label,
