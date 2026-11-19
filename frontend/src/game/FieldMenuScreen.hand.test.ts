@@ -489,7 +489,18 @@ describe('FieldMenuScreen: 指と実際の絵の間隔・各画面・空 (#1223)
     s.dispatch({ type: 'confirm' })
     settle(s)
     const lay = computeMenuLayout(1280, 720, ITEMS.length, PARTY.length)
-    for (const h of hands(s)) expect(h.left).toBeGreaterThanOrEqual(lay.base.x - 1e-6)
+    const sl = computeScreenLayout({
+      kind: 'item',
+      base: lay.base,
+      partyCount: PARTY.length,
+      tabCount: 2,
+      listCount: 1,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+    })
+    const solid = hands(s).find((h) => !h.blink)!
+    expect(solid.left).toBeGreaterThanOrEqual(sl.party[0].x - 1e-6)
   })
 
   const SCREENS: FieldMenuItemDef[] = [
@@ -524,7 +535,7 @@ describe('FieldMenuScreen: 指と実際の絵の間隔・各画面・空 (#1223)
     const hs = hands(s)
     if (label === '') {
       // 何も無い画面は指を出さない（落ちない）
-      expect(hs.filter((h) => !h.blink).length).toBeLessThanOrEqual(1)
+      expect(hs.map((h) => h.blink)).toEqual([])
     } else {
       expect(hs.map((h) => h.blink)).toEqual([false])
       if (label !== 'アスカ') expectPointsAtText(hs[0], textsOf(s), label)
@@ -544,25 +555,35 @@ describe('FieldMenuScreen: 指と実際の絵の間隔・各画面・空 (#1223)
 
   it('パーティ 0 人でもどうぐ・まほう・そうびの画面は落ちず、人物の指は出ない', () => {
     const s = openWith([...ITEMS, ...SCREENS.slice(0, 1)], [])
-    for (const idx of [IDX.item, IDX.magic, ITEMS.length]) {
+    // どうぐは最初の階層がタブなのでタブの指だけ。まほう・そうびは最初の階層が人物なので指は 0
+    for (const [idx, count] of [
+      [IDX.item, 1],
+      [IDX.magic, 0],
+      [ITEMS.length, 0],
+    ]) {
       s.dispatch({ type: 'tap', index: idx })
       settle(s)
-      expect(() => hands(s)).not.toThrow()
+      expect(hands(s)).toHaveLength(count)
       s.dispatch({ type: 'back' })
       settle(s)
     }
   })
 
-  it('タブ 0 個のどうぐ・アプリストアでも落ちず、タブの指は出ない', () => {
+  it('タブが空の定義は既定のタブになり（タブ 0 個の画面は作られない）、指は既定の最初のタブを指す', () => {
     const items: FieldMenuItemDef[] = [
       { id: 'item', label: 'どうぐ', content: { tabs: [] } },
       { id: 'appstore', label: 'アプリストア', content: { tabs: [] } },
     ]
     const s = openWith(items, PARTY)
-    for (const idx of [0, 1]) {
+    for (const [idx, label] of [
+      [0, 'つかう'],
+      [1, '刀'],
+    ] as const) {
       s.dispatch({ type: 'tap', index: idx })
       settle(s)
-      expect(() => hands(s)).not.toThrow()
+      const hs = hands(s)
+      expect(hs).toHaveLength(1)
+      expectPointsAtText(hs[0], textsOf(s), label)
       s.dispatch({ type: 'back' })
       settle(s)
     }
