@@ -343,11 +343,14 @@ export function resolveRpg(rpg: RpgSaveState, base: RpgBaseConfig): RpgResolved 
   return out
 }
 
-/** マスターに差分を重ねる。maxHp / maxMp は hp / mp が上回らないよう持ち上げる（hp だけ書いたセーブでも矛盾しない） */
+/**
+ * マスターに差分を重ねる。差分に maxHp / maxMp が無いときだけ、hp / mp が上回らないよう持ち上げる（hp だけ書いたセーブでも矛盾しない）。
+ * 差分に maxHp / maxMp があれば書いた値のまま（一枚絵フィールドの素の値は、装備込みの最大値まで回復した hp が素の maxHp を超えうる。#1234）
+ */
 function applyPatch(def: BattleEntity, patch: RpgEntityPatch): BattleEntity {
   const merged = { ...cloneJson(def), ...cloneJson(patch) } as BattleEntity
-  if (merged.maxHp < merged.hp) merged.maxHp = merged.hp
-  if (merged.maxMp < merged.mp) merged.maxMp = merged.mp
+  if (!hasOwn(patch, 'maxHp') && merged.maxHp < merged.hp) merged.maxHp = merged.hp
+  if (!hasOwn(patch, 'maxMp') && merged.maxMp < merged.mp) merged.maxMp = merged.mp
   return merged
 }
 
@@ -360,6 +363,9 @@ export function diffEntity(entity: BattleEntity, def: BattleEntity | undefined):
       continue
     out[k] = cloneJson(v)
   }
+  // hp が maxHp を超える者（#1234 の素の値）は maxHp も必ず書く。書かないと再開時の持ち上げで maxHp が hp まで上がる
+  if (entity.hp > entity.maxHp) out.maxHp = entity.maxHp
+  if (entity.mp > entity.maxMp) out.maxMp = entity.maxMp
   return out as RpgEntityPatch
 }
 

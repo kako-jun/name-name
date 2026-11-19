@@ -5,6 +5,7 @@ import { DEFAULT_FIELD_MENU_ITEMS } from './fieldMenu'
 import { FieldMenuRuntime, type FieldMenuRuntimeDeps } from './fieldMenuRuntime'
 import { DEFAULT_MENU_TRANSITION } from './fieldMenuTransition'
 import { emptyGearState, type GearShopConfig, type GearState } from './gearShop'
+import { applyGearStats } from './gearStats'
 import type { BattleEntity } from './spellDsl'
 
 const ent = (id: string, over: Partial<BattleEntity> = {}): BattleEntity => ({
@@ -396,5 +397,111 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     const { rt, state } = gearSetup()
     expect(rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!.ok).toBe(true)
     expect(state.inventory.potion).toBe(1)
+  })
+})
+
+describe('ステータスの表示値 = 戦闘の実値 (#1234)', () => {
+  const cfg: GearShopConfig = {
+    multiplier: 2,
+    entries: [
+      { id: 'quick', kind: 'blade', owner: 'a', basePrice: 100, equipBonus: 'agi+4, atk+2' },
+      { id: 'vest', kind: 'armor', price: 50, equipBonus: 'def+3, hp+10, mp+4' },
+    ],
+  }
+  /** 一枚絵フィールド（startFieldGame）と同じ配線: 素の値は getParty、ステータス・どうぐ・まほうは gearStats で装備込み */
+  function wired(over: Partial<FieldMenuRuntimeDeps> = {}) {
+    const g = {
+      state: emptyGearState() as GearState,
+      gold: 1000,
+      equipment: {} as Record<string, string[]>,
+    }
+    // 素の値の正本（setup の state）は setup の後で決まるので、表示の関数からは後で参照する
+    let party: () => BattleEntity[] = () => []
+    const battleParty = () => applyGearStats(party(), { shop: cfg, equipment: g.equipment })
+    const r = setup({
+      gearStats: () => ({ shop: cfg, equipment: g.equipment }),
+      getEquipment: () => g.equipment,
+      gear: {
+        cfg,
+        getState: () => g.state,
+        setState: (s) => (g.state = s),
+        getGold: () => g.gold,
+        setGold: (n) => (g.gold = n),
+        getFlags: () => ({}),
+        setEquipment: (m, l) => (g.equipment[m] = l),
+      },
+      ...over,
+    })
+    party = () => r.state.party
+    return { ...r, g, battleParty }
+  }
+
+  it('持ち替えた直後の ちから・まもり・すばやさ・HP は、戦闘に渡す値と同じ。素の値（getParty）は変わらない', () => {
+    const { rt, state, battleParty } = wired()
+    rt.use({ screen: 'appstore', entryId: 'quick', casterId: 'a' })
+    rt.use({ screen: 'appstore', entryId: 'vest', casterId: 'a' })
+    rt.use({ screen: 'equip', entryId: 'quick', casterId: 'a' })
+    const out = rt.use({ screen: 'equip', entryId: 'vest', casterId: 'a' })!
+    const shown = out.party!.find((p) => p.id === 'a')!
+    const inBattle = battleParty().party.find((p) => p.id === 'a')!
+    // 現在 HP は絶対値（装備しても回復しない）。最大 HP だけ装備込み
+    expect(shown).toMatchObject({ atk: 3, def: 4, agi: 5, hp: 10, maxHp: 50 })
+    expect(shown).toMatchObject({
+      atk: inBattle.atk,
+      def: inBattle.def,
+      agi: inBattle.agi,
+      hp: inBattle.hp,
+      maxHp: inBattle.maxHp,
+    })
+    expect(state.party[0]).toMatchObject({ atk: 1, def: 1, agi: 1, hp: 10, maxHp: 40 })
+  })
+
+  it('どうぐの回復は装備込みの味方で計算し、素の値へ戻して書く（現在 HP は絶対値）', () => {
+    const { rt, state, g } = wired()
+    g.equipment.a = ['vest']
+    const out = rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!
+    expect(state.party[0]).toMatchObject({ hp: 30, maxHp: 40, def: 1 })
+    expect(out.party!.find((p) => p.id === 'a')).toMatchObject({ hp: 30, maxHp: 50, def: 4 })
+  })
+
+  it('ポーションの回復の上限は装備込みの最大 HP（素の maxHp を超えて素の値に残る）', () => {
+    const { rt, state, g } = wired()
+    g.equipment.a = ['vest']
+    state.party[0] = { ...state.party[0], hp: 40 }
+    const out = rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!
+    expect(out.party!.find((p) => p.id === 'a')).toMatchObject({ hp: 50, maxHp: 50 })
+    expect(state.party[0]).toMatchObject({ hp: 50, maxHp: 40 })
+    // 満タン（装備込み）にはもう効かない
+    expect(rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!.ok).toBe(false)
+  })
+
+  it('まほうの MP の判定は装備込みの味方（ステータスの表示と一致する）', () => {
+    const big: BattleSpellEntry = {
+      id: 'big',
+      name: 'ケアルガ',
+      mp: 7,
+      target: '味方単体',
+      effect: 'heal 15..15',
+    }
+    const { rt, state, g } = wired({ spells: [...spells, big] })
+    // 素の最大 MP 6 を超える現在 MP 8（装備込みの最大 MP 10 まで回復した値）
+    state.party[0] = { ...state.party[0], mp: 8 }
+    g.equipment.a = ['vest']
+    const ok = rt.use({ screen: 'magic', entryId: 'big', casterId: 'a', targetId: 'a' })!
+    expect(ok.ok).toBe(true)
+    expect(state.party[0]).toMatchObject({ mp: 1, maxMp: 6 })
+    expect(ok.party!.find((p) => p.id === 'a')).toMatchObject({ mp: 1, maxMp: 10 })
+    // 装備を外すと装備込みの最大 MP は 6。素の値に 8 が残っていても判定は 6 で行う（表示と同じ）
+    state.party[0] = { ...state.party[0], mp: 8 }
+    g.equipment.a = []
+    const ng = rt.use({ screen: 'magic', entryId: 'big', casterId: 'a', targetId: 'a' })!
+    expect(ng.ok).toBe(false)
+    expect(ng.party!.find((p) => p.id === 'a')).toMatchObject({ mp: 6, maxMp: 6 })
+  })
+
+  it('gearStats を渡さなければ getParty の値（従来どおり）', () => {
+    const { rt } = setup()
+    const out = rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!
+    expect(out.party!.find((p) => p.id === 'a')).toMatchObject({ hp: 30, maxHp: 40, atk: 1 })
   })
 })

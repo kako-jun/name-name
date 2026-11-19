@@ -30,6 +30,12 @@ import type { BattleEntity } from './spellDsl'
 import type { RpgMenuState } from './rpgSave'
 import { changeGear, purchase, saleOf, type GearMenuContext, type MemberDefLike } from './gearMenu'
 import type { GearShopConfig, GearState } from './gearShop'
+import {
+  applyGearStats,
+  removeGearStats,
+  type GearStatDelta,
+  type GearStatsInput,
+} from './gearStats'
 
 /** 刀・防具の購入・持ち替えの接続 (#881)。`gearShop` を設定したゲームだけ渡す。正本（状態・所持金・装備列）は呼び出し側 */
 export interface FieldMenuGearDeps {
@@ -62,7 +68,13 @@ export interface FieldMenuRuntimeDeps {
   /** BGM と SE がそれぞれ接続されているか */
   bgm: boolean
   se: boolean | (() => boolean)
+  /** 味方の素の値（一枚絵フィールドの `partyState`。装備を含まない） */
   getParty(): BattleEntity[]
+  /**
+   * 装備の能力値の入力 (#1234)。渡すと、ステータスの表示・どうぐ / まほうの判定と効果を装備込みの味方（戦闘の実値と同じ）で行い、
+   * `setParty` には装備を引いた素の値を返す（MP の判定がステータスと一致・回復の上限は装備込みの最大値）。省略は `getParty()` の値のまま
+   */
+  gearStats?(): GearStatsInput
   setParty(party: BattleEntity[]): void
   getInventory(): Record<string, number>
   setInventory(inv: Record<string, number>): void
@@ -126,11 +138,19 @@ export class FieldMenuRuntime {
     }
   }
 
-  private rpg(): LiveRpg {
+  /** 装備込みの味方と足した分。`gearStats` が無ければ素の値のまま（足した分なし） */
+  private equipped(): { party: BattleEntity[]; deltas: Record<string, GearStatDelta> } {
+    const input = this.d.gearStats?.()
+    return input
+      ? applyGearStats(this.d.getParty(), input)
+      : { party: this.d.getParty(), deltas: {} }
+  }
+
+  private rpg(party: BattleEntity[] = this.equipped().party): LiveRpg {
     const gear = this.gearCtx()
     return {
       ...(gear ? { gear } : {}),
-      party: this.d.getParty(),
+      party,
       items: this.d.items,
       inventory: this.d.getInventory(),
       itemOrder: this.itemOrder,
@@ -163,19 +183,24 @@ export class FieldMenuRuntime {
   }
 
   private partyStats(): FieldMenuPartyStat[] {
-    return this.d.getParty().map((p) => ({
+    // 装備を持ち替えた直後も、ステータスの ちから・まもり・すばやさ が戦闘の実値と同じになる (#1234)
+    return this.equipped().party.map((p) => ({
       id: p.id,
       hp: p.hp,
       maxHp: p.maxHp,
       mp: p.mp,
       maxMp: p.maxMp,
+      atk: p.atk,
+      def: p.def,
+      agi: p.agi,
       ...(p.level !== undefined ? { level: p.level } : {}),
     }))
   }
 
-  private outcome(r: FieldUseResult): FieldUseOutcome {
+  private outcome(r: FieldUseResult, deltas: Record<string, GearStatDelta>): FieldUseOutcome {
     if (r.ok) {
-      this.d.setParty(r.party)
+      // 装備込みで計算した結果から足した分を引いて素の値へ戻す（現在 HP / MP は絶対値のまま）
+      this.d.setParty(removeGearStats(r.party, deltas))
       this.d.setInventory(r.inventory)
     }
     return { ok: r.ok, notice: r.notice, items: this.items(), party: this.partyStats() }
@@ -208,12 +233,16 @@ export class FieldMenuRuntime {
       }
       return { ok: r.ok, notice: r.notice, items: this.items(), party: this.partyStats() }
     }
-    const rpg = this.rpg()
+    const eq = this.equipped()
+    const rpg = this.rpg(eq.party)
     const rng = this.d.rng ?? Math.random
     if (screenKindOfItem(def) === 'item')
-      return this.outcome(useFieldItem(rpg, req.entryId, req.targetId, rng))
+      return this.outcome(useFieldItem(rpg, req.entryId, req.targetId, rng), eq.deltas)
     if (def.id === 'magic' && req.casterId !== undefined)
-      return this.outcome(useFieldSpell(rpg, req.entryId, req.casterId, req.targetId, rng))
+      return this.outcome(
+        useFieldSpell(rpg, req.entryId, req.casterId, req.targetId, rng),
+        eq.deltas
+      )
     return null
   }
 
