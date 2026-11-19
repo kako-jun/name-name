@@ -4,7 +4,8 @@
  * - `off`（既定）= 従来どおり。対象には手（敵は右から左向き）と頭上の ▼、番の味方には頭上の ▼ と名前の左の黄色い ▶（対象選択の間は番の ▼ を隠す）
  * - `ff` = FF（SNES・ピクセルリマスター）の出し方。対象は手のカーソルだけで指し（▼ は出さない）、手は敵でも左から右向き。
  *   敵名ウィンドウ（#954）の対象の行を明るい帯で強調し、行のタップでもその敵を指す。番の味方は頭上の ▼（と名前の黄色）だけで示し、
- *   対象選択の間も ▼ を出したまま。ステータス窓の名前の左の ▶・▷ は出さない（FF に横向きの三角の印は無い。調査は #1189）
+ *   対象選択の間も ▼ を出したまま。ステータス窓の名前の左には、▼ と同じ番の味方にだけ黄色の ▶ を出す（▼ が出ている間だけ。kako-jun 指示 #1225）。
+ *   切り替え可能な味方の ▷ は出さない（調査は #1189）
  * 他の設定（敵名ウィンドウ・ATB・窓の配置など）とは直交で、窓の寸法・配置は変えない。
  */
 export type BattleTargetCursorMode = 'off' | 'ff'
@@ -27,9 +28,13 @@ export function showsTargetSelectMark(mode: BattleTargetCursorMode): boolean {
   return mode !== 'ff'
 }
 
-/** 番の味方の名前の左に ▶（と切り替え可能な味方の ▷）を出すか。`ff` は頭上の ▼ だけで番を示す */
-export function showsStatusTurnMarker(mode: BattleTargetCursorMode): boolean {
-  return mode !== 'ff'
+/** 名前の左の印（▶ / ▷）を出すか。`isActor` = 番の味方（▶）、`switchable` = タップで番を移せる味方（▷）。`ff` は番の ▶ だけ出し ▷ は出さない（#1225） */
+export function showsStatusTurnMarker(
+  mode: BattleTargetCursorMode,
+  isActor: boolean,
+  switchable = false
+): boolean {
+  return mode === 'ff' ? isActor : isActor || switchable
 }
 
 /**
