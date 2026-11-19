@@ -7,6 +7,8 @@
 import type { Env, Project } from "./types";
 
 export const PROJECTS: ReadonlyArray<Project> = [
+  // sit-by-me は一覧の先頭（トップで選ぶだけでデモが始まる入口にする。#1219）
+  { name: "sit-by-me", title: "Sit by Me", repo: "kako-jun/sit-by-me", scriptsDir: "play" },
   { name: "ogurasia", title: "おぐらじあ", repo: "kako-jun/ogurasia" },
   { name: "attama", title: "あったま空っぽの邦画", repo: "kako-jun/attama" },
   { name: "skirts-colour", title: "宇宙の果てわ、なに色か？", repo: "kako-jun/skirts-colour", scriptsDir: "content/scripts" },
@@ -23,7 +25,6 @@ export const PROJECTS: ReadonlyArray<Project> = [
   { name: "elevator-gurl", title: "ヱレベヰターガール", repo: "kako-jun/elevator-gurl", external_url: "https://elevator-gurl.llll-ll.com" },
   { name: "the-peeple", title: "The Peeple", repo: "kako-jun/the-peeple", external_url: "https://the-peeple.llll-ll.com" },
   { name: "theo-hayami", title: "せおはやみ", repo: "kako-jun/theo-hayami", scriptsDir: "content/scripts" },
-  { name: "sit-by-me", title: "Sit by Me", repo: "kako-jun/sit-by-me", scriptsDir: "play" },
   { name: "treppenwitz", title: "絶対もっといいセリフあったよな", repo: "kako-jun/treppenwitz" },
 ];
 
