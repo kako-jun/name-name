@@ -41,11 +41,8 @@ describe('normalizeBattleTargetCursor', () => {
 })
 
 describe('印の出し分け', () => {
-  it('off（既定）は従来どおり: 対象に ▼・番の ▶ を出す', () => {
+  it('off（既定）は従来どおり: 対象に ▼、番の ▶ と切り替え可能な ▷ を出す', () => {
     expect(showsTargetSelectMark('off')).toBe(true)
-    expect(showsStatusTurnMarker('off', true)).toBe(true)
-  })
-  it('off は番の ▶ と切り替え可能な ▷ を出す', () => {
     expect(showsStatusTurnMarker('off', true)).toBe(true)
     expect(showsStatusTurnMarker('off', false, true)).toBe(true)
     expect(showsStatusTurnMarker('off', false, false)).toBe(false)

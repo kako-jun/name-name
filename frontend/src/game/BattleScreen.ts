@@ -2912,8 +2912,10 @@ export class BattleScreen extends Container {
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
       const isActor = hero.hp > 0 && this.actorIndex() === 0
+      // front は味方の頭上の ▼ が出ない（partyViews が空）ので、ff では ▶ も出さない（#1225。▼ が出ている間だけ ▶）
       if (this.layoutMode === 'front' && this.atbMarkers[0])
-        this.atbMarkers[0].visible = showsStatusTurnMarker(this.targetCursor, isActor)
+        this.atbMarkers[0].visible =
+          this.targetCursor === 'ff' ? false : showsStatusTurnMarker(this.targetCursor, isActor)
       this.heroStatsText.text = `${this.withStatusTags(hero.name, hero, 'party', 0)}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
