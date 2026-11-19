@@ -4,7 +4,15 @@
  * - 階層 (#1223): いまの階層は常時表示、確定済みの上の階層は選んだ位置に点滅で残る。戻ると常時に戻る。
  * - 間隔 (#1223): 全階層で 指の右端 = 文字（または画像・絵）の左端 − 共通の間隔。
  */
-import { CanvasTextMetrics, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
+import {
+  CanvasTextMetrics,
+  Container,
+  Graphics,
+  Sprite,
+  Text,
+  Texture,
+  TextureSource,
+} from 'pixi.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HAND_FINGER_Y_RATIO } from './battleMenuLayout'
 import { FieldMenuScreen, type FieldMenuPartyView } from './FieldMenuScreen'
@@ -416,5 +424,160 @@ describe('FieldMenuScreen: 指の階層と間隔 (#1223)', () => {
     const name = textsOf(s).find((t) => t.text === 'アスカ')!
     const slot = sl.party[0]
     expect((name.x - slot.x) / slot.h).toBeCloseTo(topOffset, 5)
+  })
+})
+
+describe('FieldMenuScreen: 指と実際の絵の間隔・各画面・空 (#1223)', () => {
+  function openWith(
+    items: FieldMenuItemDef[],
+    party: FieldMenuPartyView[],
+    images: Record<string, Texture | null> = {}
+  ): FieldMenuScreen {
+    const s = new FieldMenuScreen({ width: 1280, height: 720, acrylic: false, onClose: () => {} })
+    s.open({
+      items,
+      party,
+      info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+      slots: ['埋まっている', null, null],
+      images,
+    })
+    s.tick(10_000)
+    return s
+  }
+
+  /** 縦長・横長の絵（縦横比 1:4 / 4:1）。1 辺 1px のテクスチャでは縦横比の差が出ない */
+  const tall = new Texture({ source: new TextureSource({ width: 20, height: 80 }) })
+  const wide = new Texture({ source: new TextureSource({ width: 80, height: 20 }) })
+
+  function spriteOf(s: FieldMenuScreen, tex: Texture): Sprite {
+    let found: Sprite | undefined
+    walk(s, (c) => {
+      if (c instanceof Sprite && !(c instanceof Text) && c.texture === tex) found = c
+    })
+    expect(found, '絵のスプライト').toBeDefined()
+    return found!
+  }
+
+  it.each([
+    ['縦長', tall],
+    ['横長', wide],
+  ])(
+    'パーティ枠の指と実際に置かれた絵（%s）の左端の間隔は FIELD_HAND_GAP_RATIO で一定',
+    (_n, tex) => {
+      const party = PARTY.map((p) => ({ ...p, texture: tex }))
+      const s = openWith(ITEMS, party)
+      s.dispatch({ type: 'tap', index: IDX.item })
+      settle(s)
+      s.dispatch({ type: 'confirm' })
+      s.dispatch({ type: 'confirm' }) // 使う相手 = アスカ
+      settle(s)
+      const solid = hands(s).find((h) => !h.blink)!
+      const sp = spriteOf(s, tex)
+      const artLeft = sp.x - sp.width * sp.anchor.x
+      expect(solid.right + solid.height * FIELD_HAND_GAP_RATIO).toBeCloseTo(artLeft, 5)
+    }
+  )
+
+  it('縦長の絵でも、指の左端は枠の中（絵が箱の中央に寄っても指が枠の外へ出ない）', () => {
+    const s = openWith(
+      ITEMS,
+      PARTY.map((p) => ({ ...p, texture: tall }))
+    )
+    s.dispatch({ type: 'tap', index: IDX.item })
+    settle(s)
+    s.dispatch({ type: 'confirm' })
+    s.dispatch({ type: 'confirm' })
+    settle(s)
+    const lay = computeMenuLayout(1280, 720, ITEMS.length, PARTY.length)
+    for (const h of hands(s)) expect(h.left).toBeGreaterThanOrEqual(lay.base.x - 1e-6)
+  })
+
+  const SCREENS: FieldMenuItemDef[] = [
+    {
+      id: 'equip',
+      label: 'そうび',
+      content: {
+        entriesByParty: {
+          a: [{ label: 'かたな', id: 'k' }],
+          b: [{ label: 'かたな', id: 'k' }],
+        },
+      },
+    },
+    { id: 'load', label: 'ロード' },
+    {
+      id: 'config',
+      label: 'せってい',
+      content: { options: [{ key: 'bgm', label: 'BGM', choices: ['あり', 'なし'] }] },
+    },
+    { id: 'empty', label: 'からっぽ' },
+  ]
+
+  it.each([
+    ['equip', 0, 'アスカ'],
+    ['load', 1, 'スロット1'],
+    ['config', 2, 'BGM'],
+    ['empty', 3, ''],
+  ])('%s: 画面を開くと最初の階層の常時の指が 1 つ出る', (_id, idx, label) => {
+    const s = openWith(SCREENS, PARTY)
+    s.dispatch({ type: 'tap', index: idx })
+    settle(s)
+    const hs = hands(s)
+    if (label === '') {
+      // 何も無い画面は指を出さない（落ちない）
+      expect(hs.filter((h) => !h.blink).length).toBeLessThanOrEqual(1)
+    } else {
+      expect(hs.map((h) => h.blink)).toEqual([false])
+      if (label !== 'アスカ') expectPointsAtText(hs[0], textsOf(s), label)
+    }
+  })
+
+  it('そうび: 人物 → 一覧に進むと、人物の指は点滅で残り一覧に常時の指が出る', () => {
+    const s = openWith(SCREENS, PARTY)
+    s.dispatch({ type: 'tap', index: 0 })
+    settle(s)
+    s.dispatch({ type: 'confirm' })
+    settle(s)
+    const hs = hands(s)
+    expect(hs.map((h) => h.blink).sort()).toEqual([false, true])
+    expectPointsAtText(hs.find((h) => !h.blink)!, textsOf(s), 'かたな')
+  })
+
+  it('パーティ 0 人でもどうぐ・まほう・そうびの画面は落ちず、人物の指は出ない', () => {
+    const s = openWith([...ITEMS, ...SCREENS.slice(0, 1)], [])
+    for (const idx of [IDX.item, IDX.magic, ITEMS.length]) {
+      s.dispatch({ type: 'tap', index: idx })
+      settle(s)
+      expect(() => hands(s)).not.toThrow()
+      s.dispatch({ type: 'back' })
+      settle(s)
+    }
+  })
+
+  it('タブ 0 個のどうぐ・アプリストアでも落ちず、タブの指は出ない', () => {
+    const items: FieldMenuItemDef[] = [
+      { id: 'item', label: 'どうぐ', content: { tabs: [] } },
+      { id: 'appstore', label: 'アプリストア', content: { tabs: [] } },
+    ]
+    const s = openWith(items, PARTY)
+    for (const idx of [0, 1]) {
+      s.dispatch({ type: 'tap', index: idx })
+      settle(s)
+      expect(() => hands(s)).not.toThrow()
+      s.dispatch({ type: 'back' })
+      settle(s)
+    }
+  })
+
+  it('指の列（階層）が変わったら点滅の位相を 0 に戻す（確定した指が薄い位相で始まらない）', () => {
+    const s = openWith(ITEMS, PARTY)
+    s.dispatch({ type: 'tap', index: IDX.item })
+    settle(s)
+    s.dispatch({ type: 'confirm' }) // タブ → 一覧
+    settle(s)
+    s.tick(FIELD_HAND_BLINK_PERIOD_MS * 0.75) // 薄い位相
+    s.dispatch({ type: 'confirm' }) // 一覧 → 使う相手
+    s.tick(1)
+    const box = hands(s).find((h) => h.blink)!.g.parent!
+    expect(box.alpha).toBe(1)
   })
 })

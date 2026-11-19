@@ -48,6 +48,7 @@ import {
   computeStatusLayout,
   emWidth,
   fitPortrait,
+  portraitLeft,
   fitSize,
   statusArea,
   type StatusLayoutKind,
@@ -236,6 +237,8 @@ export class FieldMenuScreen extends Container {
   private blink: Container | null = null
   /** 点滅の経過時間 (ms) */
   private blinkMs = 0
+  /** 直前に描いた指の列の形（階層が変わったら点滅の位相を戻す #1223） */
+  private handKey = ''
 
   constructor(private readonly opts: FieldMenuScreenOptions) {
     super()
@@ -664,6 +667,11 @@ export class FieldMenuScreen extends Container {
     )
     // 指の列（階層ごとの選択位置。いまの階層は常時、上の階層は点滅 #1223）と、各階層の指の置き場
     const marks = fieldMenuHandMarks(k, nav)
+    const handKey = `${k}:${marks.map((m) => `${m.level}${m.solid ? '!' : ''}`).join(',')}`
+    if (handKey !== this.handKey) {
+      this.handKey = handKey
+      this.blinkMs = 0
+    }
     const anchors = new Map<string, FieldHandAnchor>()
     // 左の人物（どうぐ・まほう・そうび・ませき・ジョブ）。選んでいる段階に入ってから強調する
     sl.party.forEach((r, i) => {
@@ -696,23 +704,24 @@ export class FieldMenuScreen extends Container {
     // タブ（サブコマンド）
     sl.tabs.forEach((r, i) => {
       this.panel(C, r, lay)
+      // 長いラベルでも指（手の幅 + 間隔）と文字がタブの中に収まるよう、字を最初から縮めた大きさで作り、指の置き場の分だけ右へ寄せる
+      const tabHandH = r.h * 0.55
+      const pad = r.h * 0.15
+      const room = r.w - fieldHandLane(tabHandH) - pad * 2
+      const tabColor = i === nav.tab && nav.focus !== 'tab' ? NOTICE_COLOR : WHITE
+      const tabText = content.tabs[i].label
+      const probe = this.text(tabText, sl.fonts.tab, tabColor, 0, 0, 'center')
+      const natural = textWidth(probe)
+      probe.destroy()
+      const tabSize = natural > room ? Math.max(1, sl.fonts.tab * (room / natural)) : sl.fonts.tab
       const label = this.text(
-        content.tabs[i].label,
-        sl.fonts.tab,
-        i === nav.tab && nav.focus !== 'tab' ? NOTICE_COLOR : WHITE,
+        tabText,
+        tabSize,
+        tabColor,
         r.x + r.w / 2 + r.h * 0.2,
         r.y + r.h / 2,
         'center'
       )
-      // 長いラベルでも指（手の幅 + 間隔）と文字がタブの中に収まるよう、字を縮め、指の置き場の分だけ右へ寄せる
-      const tabHandH = r.h * 0.55
-      const pad = r.h * 0.15
-      const room = r.w - fieldHandLane(tabHandH) - pad * 2
-      const natural = textWidth(label)
-      if (natural > room) {
-        label.style.fontSize = Math.max(1, Number(label.style.fontSize) * (room / natural))
-        label.style.padding = Math.ceil(Number(label.style.fontSize) * 0.3)
-      }
       const lw = textWidth(label)
       label.x = Math.max(label.x, r.x + pad + fieldHandLane(tabHandH) + lw / 2)
       C.addChild(label)
@@ -865,7 +874,10 @@ export class FieldMenuScreen extends Container {
       const handH = r.h * 0.6
       const x0 = r.x + r.h * 0.15 + fieldHandLane(handH)
       const thumb = r.h * 0.86
-      if (tex) this.placeThumb(C, tex, x0 + thumb / 2, r.y + r.h * 0.5, thumb, !enabled)
+      // 指は実際に置いた画像の左端を指す（長辺で縮めるので、細長い画像は左に余白が出る）
+      const thumbLeft = tex
+        ? this.placeThumb(C, tex, x0 + thumb / 2, r.y + r.h * 0.5, thumb, !enabled)
+        : x0
       C.addChild(
         this.text(
           label,
@@ -876,7 +888,11 @@ export class FieldMenuScreen extends Container {
           'left'
         )
       )
-      anchors.set(fieldHandSlotKey('list', i), { left: x0, cy: r.y + r.h / 2, height: handH })
+      anchors.set(fieldHandSlotKey('list', i), {
+        left: thumbLeft,
+        cy: r.y + r.h / 2,
+        height: handH,
+      })
       if (detail)
         C.addChild(
           this.text(detail, sl.fonts.row, color, r.x + r.w - r.h * 0.5, r.y + r.h / 2, 'right')
@@ -943,7 +959,7 @@ export class FieldMenuScreen extends Container {
     return this.data?.images?.[url] ?? null
   }
 
-  /** 小さな絵（中心 (cx, cy)・一辺 size に収める）。選べない行は暗く */
+  /** 小さな絵（中心 (cx, cy)・一辺 size に収める）。選べない行は暗く。実際に置いた左端 x を返す */
   private placeThumb(
     C: Container,
     tex: Texture,
@@ -951,14 +967,16 @@ export class FieldMenuScreen extends Container {
     cy: number,
     size: number,
     dim: boolean
-  ): void {
+  ): number {
     const sp = new Sprite(tex)
     sp.anchor.set(0.5)
-    sp.scale.set(size / Math.max(tex.width, tex.height, 1))
+    const scale = size / Math.max(tex.width, tex.height, 1)
+    sp.scale.set(scale)
     sp.position.set(cx, cy)
     if (dim) sp.alpha = 0.45
     sp.eventMode = 'none'
     C.addChild(sp)
+    return cx - (tex.width * scale) / 2
   }
 
   private drawStatus(
@@ -1057,8 +1075,9 @@ export class FieldMenuScreen extends Container {
   /**
    * 絵を枠 R に収めて置く (#1211)。大きさ・足元は `fitPortrait`、枠の外へ出るアクスタの台座・斜めの影は枠の矩形で切り抜く
    * （絵の層は他の領域の文字より上にあるので、隣の枠・下の「戻る」にかからないように）。切り抜きは絵ごとに 1 組を使い回す。
+   * 実際に置いた絵の左端 x を返す（絵が無いときは枠の左端。指の基準 #1223）。
    */
-  private placeFitted(layer: Container, tex: Texture | null, R: Rect): void {
+  private placeFitted(layer: Container, tex: Texture | null, R: Rect): number {
     const idx = this.clipIndex++
     let slot = this.clips[idx]
     if (!slot) {
@@ -1071,9 +1090,10 @@ export class FieldMenuScreen extends Container {
     clip.addChild(mask)
     clip.mask = mask
     layer.addChild(clip)
-    if (!tex) return
+    if (!tex) return R.x
     const fit = fitPortrait(R, tex.width, tex.height, this.useAcrylic)
     this.placeArt(clip, tex, fit.height, fit.x, fit.y)
+    return portraitLeft(fit, tex.width, tex.height)
   }
 
   private readonly clips: { clip: Container; mask: Graphics }[] = []
@@ -1102,7 +1122,12 @@ export class FieldMenuScreen extends Container {
     const lane = handLane ? fieldHandLane(handH) : 0
     const artX = r.x + r.h * 0.05 + lane
     // 絵は左端の正方形に収める (#1211)。台座・影が隣の枠にはみ出さない
-    this.placeFitted(art, p.texture, { x: artX, y: r.y, w: r.h * 1.2 - lane, h: r.h })
+    const artLeft = this.placeFitted(art, p.texture, {
+      x: artX,
+      y: r.y,
+      w: r.h * 1.2 - lane,
+      h: r.h,
+    })
     const tx = r.x + r.h * 1.4
     const right = r.x + r.w - r.h * 0.3
     const lv = p.level === undefined ? 'Lv --' : `Lv ${p.level}`
@@ -1110,8 +1135,8 @@ export class FieldMenuScreen extends Container {
     // 「いま選択中」の表示（矢印でなくアクスタ側に出す。戦闘と同じ見方）
     const mark = emphasize ? markLabel : null
     const size = baseSize
-    // 指は名前の行の縦中心で、絵の左端を指す
-    const anchorAt = (cy: number): FieldHandAnchor => ({ left: artX, cy, height: handH })
+    // 指は名前の行の縦中心で、実際に置かれた絵の左端を指す（縦長の絵でも間隔が一定）
+    const anchorAt = (cy: number): FieldHandAnchor => ({ left: artLeft, cy, height: handH })
     // 経験値 (#1186): 「次のレベルまで N」を最下段に 1 行足す。段が増えるので行の位置を詰め直す
     const exp = this.opts.exp ? p.exp : undefined
     if (exp) {

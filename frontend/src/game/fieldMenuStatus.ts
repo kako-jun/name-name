@@ -188,6 +188,16 @@ export function fitPortrait(R: Rect, texW: number, texH: number, acrylic: boolea
   return { height: g.sprite.height * sc, x: cx, y: frame.y + side - belowFoot, frame }
 }
 
+/**
+ * `fitPortrait` が実際に置く絵の左端 x (#1223)。アクスタ表示は外枠（`frame`）の左端、通常は絵の幅（高さ × 縦横比）を中央 `fit.x` から振った左端。
+ * 絵が箱の中央に置かれるので、箱の左端とは一致しない（縦長の絵は左に余白が出る）。指と絵の間隔を一定にする基準に使う。
+ */
+export function portraitLeft(fit: PortraitFit, texW: number, texH: number): number {
+  if (fit.frame) return fit.frame.x
+  const w = texH > 0 ? (fit.height / texH) * texW : 0
+  return fit.x - w / 2
+}
+
 interface Metrics {
   rowH: number
   vRow: number

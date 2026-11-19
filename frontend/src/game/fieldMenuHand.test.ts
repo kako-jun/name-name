@@ -128,3 +128,24 @@ describe('fieldHandBlinkAlpha: 点滅', () => {
     expect(fieldHandBlinkAlpha(p * 3 + p / 2)).toBe(FIELD_HAND_BLINK_DIM_ALPHA)
   })
 })
+
+describe('そうび: 一覧・確認窓に進んだときの指の列', () => {
+  it('人物 → 一覧: 人物の指は点滅で残り、一覧が常時', () => {
+    expect(fieldMenuHandMarks('equip', nav('equip', { party: 1, focus: 'list', list: 2 }))).toEqual(
+      [
+        { level: 'party', index: 1, solid: false },
+        { level: 'list', index: 2, solid: true },
+      ]
+    )
+  })
+
+  it('人物 → 一覧 → 確認窓: 人物・一覧が点滅、確認窓が常時', () => {
+    expect(
+      fieldMenuHandMarks('equip', nav('equip', { party: 1, focus: 'confirm', list: 2, confirm: 1 }))
+    ).toEqual([
+      { level: 'party', index: 1, solid: false },
+      { level: 'list', index: 2, solid: false },
+      { level: 'confirm', index: 1, solid: true },
+    ])
+  })
+})
