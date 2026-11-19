@@ -11,6 +11,7 @@ import {
   fitPortrait,
   fitSize,
   menuPortraitUrl,
+  portraitLeft,
   statusArea,
   type StatusLayoutInput,
   type StatusRegion,
@@ -341,5 +342,26 @@ describe('行の高さの下限・列の切り替え・隙間', () => {
     expect(f.labelSize).toBeLessThan(14)
     expect(f.valueSize).toBeGreaterThanOrEqual(14 * 0.75)
     void FONT
+  })
+})
+
+describe('portraitLeft（実際に置かれる絵の左端 #1223）', () => {
+  const R: Rect = { x: 100, y: 50, w: 300, h: 400 }
+  it.each([
+    [20, 80],
+    [80, 20],
+  ])('通常: 中央 fit.x から絵の幅（高さ × 縦横比）の半分を引いた左端 (%i x %i)', (tw, th) => {
+    const f = fitPortrait(R, tw, th, false)
+    const w = (f.height / th) * tw
+    expect(portraitLeft(f, tw, th)).toBeCloseTo(f.x - w / 2, 6)
+  })
+  it('通常: 縦長の絵は箱の左端より右（左に余白が出る）、箱いっぱいの横長は箱の左端以上', () => {
+    expect(portraitLeft(fitPortrait(R, 20, 80, false), 20, 80)).toBeGreaterThan(R.x)
+    expect(portraitLeft(fitPortrait(R, 80, 20, false), 80, 20)).toBeGreaterThanOrEqual(R.x)
+  })
+  it('アクスタ: 外枠 frame の左端を返す', () => {
+    const f = fitPortrait(R, 20, 80, true)
+    expect(f.frame).not.toBeNull()
+    expect(portraitLeft(f, 20, 80)).toBe(f.frame!.x)
   })
 })
