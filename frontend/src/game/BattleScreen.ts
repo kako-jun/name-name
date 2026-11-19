@@ -556,7 +556,7 @@ export interface BattleScreenOptions {
   /**
    * 対象選択・番の印の出し方 (#1189)。frontmatter `battle_target_cursor` 由来。undefined / `off` = 従来（対象に手と ▼、番の味方に ▼ と名前の左の ▶）。
    * `ff` = 対象は手のカーソルだけで指し（▼ を出さない。手は敵の左から右向き）、敵名ウィンドウ（#954）の対象の行は明るい帯で強調する（行に手は出さない）。
-   * 番の味方は頭上の ▼ だけ（対象選択の間も出したまま。▶・▷ は出さない）。ff の敵の絵のタップ範囲は、マスでなく見えている絵の矩形（`targetGeometry`）。
+   * 番の味方は頭上の ▼ と名前の左の ▶（対象選択の間も出したまま。切り替え可能な味方の ▷ は出さない）。ff の敵の絵のタップ範囲は、マスでなく見えている絵の矩形（`targetGeometry`）。
    * 窓の寸法・配置は変えない（他の設定と直交）
    */
   targetCursor?: BattleTargetCursorMode
@@ -2748,8 +2748,8 @@ export class BattleScreen extends Container {
       const switchable = !!this.opts.atbSwitch && this.engine.isAtbSwitchable(i)
       const marker = this.atbMarkers[i]
       if (marker) {
-        // ff (#1189): 番は頭上の ▼ だけで示す（FF に横向きの三角の印は無い）
-        marker.visible = (isActor || switchable) && showsStatusTurnMarker(this.targetCursor)
+        // ff (#1189, #1225): 番の ▶ だけ出す（▼ と同条件）。切り替え可能な ▷ は出さない
+        marker.visible = showsStatusTurnMarker(this.targetCursor, isActor, switchable)
         marker.text = isActor ? '▶' : '▷'
         // ▷ は小さい文字なので、薄くせず色と太さで ▶ と区別する（実画面で alpha 0.7 はほぼ見えなかった）
         marker.style.fill = isActor ? ACTOR_COLOR : SWITCHABLE_MARK_COLOR
@@ -2912,8 +2912,10 @@ export class BattleScreen extends Container {
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
       const isActor = hero.hp > 0 && this.actorIndex() === 0
+      // front は味方の頭上の ▼ が出ない（partyViews が空）ので、ff では ▶ も出さない（#1225。▼ が出ている間だけ ▶）
       if (this.layoutMode === 'front' && this.atbMarkers[0])
-        this.atbMarkers[0].visible = isActor && showsStatusTurnMarker(this.targetCursor)
+        this.atbMarkers[0].visible =
+          this.targetCursor === 'ff' ? false : showsStatusTurnMarker(this.targetCursor, isActor)
       this.heroStatsText.text = `${this.withStatusTags(hero.name, hero, 'party', 0)}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
