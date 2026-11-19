@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import 'pixi.js/events'
 import type { Text } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, ENTRANCE_LOAD_TIMEOUT_MS, type BattleScreenOptions } from './BattleScreen'
 import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleMenuData } from './battleMenu'
@@ -166,7 +166,7 @@ describe('候補窓の名前 (#1183)', () => {
     const run = (motion: 'default' | 'snappy') => {
       const s = build({ textOverflow: 'scroll', motion })
       if (motion === 'snappy') {
-        s.tick(1500)
+        s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
         s.tick(200)
       }
       const { row } = openSpellList(s)

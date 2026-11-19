@@ -143,7 +143,14 @@ import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { firstRejection, settleStartup } from './startupSettle'
-import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from './battlePreload'
+import {
+  collectBattlePreloadUrls,
+  createFieldPreloader,
+  firstAutoBattleId,
+  neighborSceneIds,
+  preloadBattleImages,
+  sceneEncounterGroups,
+} from './battlePreload'
 import {
   baseConfigOf,
   carryOverBattleResult,
@@ -578,6 +585,20 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     antialias: false,
     autoDensity: true,
   })
+  /** 場面 `sid` で起こる戦闘の先読み URL（#1219 冒頭の戦闘・#1241 エンカウント共通。戦闘背景は場面の解決順どおり） */
+  const battlePreloadUrls = (
+    sid: string,
+    enemyGroups: readonly (string | undefined)[],
+    party: readonly BattleEntity[]
+  ): string[] =>
+    collectBattlePreloadUrls({
+      enemyGroups,
+      monsters: config.monsters,
+      party,
+      background: resolveBattleBackground(config.scenes[sid], config.battle.background),
+      effectImages: Object.values(config.battle.effects ?? {}).flatMap((e) => (e ? [e.image] : [])),
+      uiImages: [config.ui?.handImage, config.ui?.selectMarkImage],
+    })
   // 冒頭の戦闘の素材の先読み (#1219)。脚本が読めたら、開始場面に入ってすぐ戦闘になる作品だけ、
   // フィールドを見せている間に戦闘の背景・敵・味方の絵を読んでおく（失敗しても何も起きない。戦闘が自分で読み直す）
   void pScript
@@ -593,16 +614,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           ? battleScripts[id]
           : undefined
       if (!def) return
-      const urls = collectBattlePreloadUrls({
-        def,
-        monsters: config.monsters,
-        party: resumed ? resumed.party : config.party,
-        background: resolveBattleBackground(config.scenes[startSceneId], config.battle.background),
-        effectImages: Object.values(config.battle.effects ?? {}).flatMap((e) =>
-          e ? [e.image] : []
-        ),
-        uiImages: [config.ui?.handImage, config.ui?.selectMarkImage],
-      })
+      const urls = battlePreloadUrls(
+        startSceneId,
+        [def.enemies],
+        resumed ? resumed.party : config.party
+      )
       return preloadBattleImages(urls, (u) => Assets.load(u))
     })
     .catch(() => {}) // 先読みは最適化だけ。脚本の失敗は下の join が本来どおり扱う
@@ -1530,8 +1546,20 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
 
   /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
   const npcChecked = new Set<string>()
+  // 場面のまわりの先読み (#1241)。場面に入るたび（起動・端の出口・ワープ）、その場面のエンカウントの戦闘の絵 → 隣の場面 → 隣のエンカウントの絵の順に読む
+  const fieldPreloader = createFieldPreloader({
+    battleUrls: (sid) => {
+      const groups = sceneEncounterGroups(config.scenes[sid])
+      return groups.length > 0 ? battlePreloadUrls(sid, groups, partyState) : []
+    },
+    loadImage: (u) => Assets.load(u),
+    loadScene: ensureScene,
+    neighbors: (sid) => neighborSceneIds(config.scenes, sid),
+    warn: (m) => console.warn(m),
+  })
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    void fieldPreloader.around(s.id)
     traceRec('f.scene', { id: s.id, x: Math.round(pos.x), y: Math.round(pos.y) })
     // 場面が変わったら進行中の NPC 移動は打ち切る（resolve してイベントを止めたままにしない）
     npcMoves.clear()
@@ -2455,6 +2483,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
     disposed = true
+    fieldPreloader.stop()
     contain.dispose()
     battleTransition.cancel()
     playerStand?.destroy()

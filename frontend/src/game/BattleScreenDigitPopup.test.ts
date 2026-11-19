@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CanvasTextMetrics } from 'pixi.js'
 import type { Container, Text } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, ENTRANCE_LOAD_TIMEOUT_MS, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import {
   popupCenterOffset,
@@ -47,8 +47,8 @@ function setup(opts: BattleScreenOptions = {}) {
   )
   const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
   created.push(s)
-  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
-  s.tick(1500)
+  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り ENTRANCE_LOAD_TIMEOUT_MS + 登場 200ms）。登場中は入力が塞がるため
+  s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
   s.tick(200)
   return s
 }
