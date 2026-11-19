@@ -26,6 +26,8 @@ import {
   resumeFromSlotData,
   planResumeBattle,
   resumeScriptedParty,
+  planScriptedResumeStart,
+  type PendingScriptedResume,
 } from './fieldResume'
 import { autoTriggers, triggerKey } from './triggerRuntime'
 import { resolveBattleBackground, type FieldTrigger } from './config'
@@ -765,6 +767,44 @@ describe('resumeScriptedParty (#1233)', () => {
     expect(out[1]).not.toBe(all[1])
     out[0].hp = 0
     expect(all[0].hp).toBe(1)
+  })
+})
+
+describe('planScriptedResumeStart (#1233)', () => {
+  const ent = (id: string, hp: number) => ({ id, hp }) as unknown as BattleEntity
+  const pending = (id: string): PendingScriptedResume =>
+    ({
+      id,
+      saved: {
+        enemies: [ent('slime', 7)],
+        script: { id, turn: 2, fired: [], joined: ['c'], fled: [] },
+      },
+      setup: {
+        enemies: [ent('slime', 99)],
+        party: [ent('a', 99)],
+        script: { id, rules: [] },
+      },
+    }) as unknown as PendingScriptedResume
+
+  it('id 一致: セーブの敵・セーブ、setup の脚本、参戦済みを足した味方で開く', () => {
+    const p = pending('boss')
+    const out = planScriptedResumeStart(p, 'boss', [ent('a', 1), ent('c', 3)])
+    expect(out).not.toBeNull()
+    expect(out!.enemies).toBe(p.saved.enemies)
+    expect(out!.saved).toBe(p.saved)
+    expect(out!.script).toBe(p.setup.script)
+    expect(out!.party).toEqual([ent('a', 1), ent('c', 3)])
+  })
+  it('id 不一致・保留なしは null（通常の経路へ）', () => {
+    expect(planScriptedResumeStart(pending('boss'), 'other', [])).toBeNull()
+    expect(planScriptedResumeStart(null, 'boss', [])).toBeNull()
+  })
+  it('配線の固定: startEventBattle は分岐の前に pendingResume を消す・start 後に残れば plain へ落とす（静的検査）', () => {
+    const body = startFieldGameSrc.slice(startFieldGameSrc.indexOf('const startEventBattle ='))
+    const clear = body.indexOf('pendingResume = null')
+    expect(clear).toBeGreaterThan(-1)
+    expect(clear).toBeLessThan(body.indexOf('planScriptedResumeStart('))
+    expect(startFieldGameSrc).toMatch(/if \(pendingResume\) \{\s*pendingResume = null/)
   })
 })
 

@@ -109,6 +109,25 @@ describe('途中再開: 敵の記憶・脚本', () => {
     expect(bad.getState().enemyMemory).toEqual([{ acted: 0 }, { acted: 0 }])
   })
 
+  it('参戦済み（joined）の味方を含む編成でも ATB のゲージ・キュー・index が party と一致する (#1233)', () => {
+    // 劇戦闘の再開: 初期編成 a,b に参戦済みの c を参戦順で足した並び
+    const e = new BattleEngine([ent('a'), ent('b'), ent('c')], [foe('s')], {
+      rng: () => 0,
+      atb: { mode: 'wait', initialGauges: { party: [1000, 400, 1000], enemies: [0] } },
+      script: { id: 'boss', rules: [] },
+      restore: {
+        atbQueue: [2, 0],
+        script: { turn: 1, fired: [], joined: ['c'], fled: [] },
+      },
+    })
+    const st = e.getState()
+    expect(st.script!.joined).toEqual(['c'])
+    expect(st.party.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+    expect(st.atb!.partyGauge).toHaveLength(3)
+    expect(st.atb!.queue).toEqual([2, 0])
+    expect(e.getCurrentActorIndex()).toBe(2)
+  })
+
   it('脚本制御の戦闘の進行（経過ターン・発動済み）を戻す', () => {
     const e = new BattleEngine([ent('a')], [foe('s')], {
       rng: () => 0,

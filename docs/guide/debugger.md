@@ -407,7 +407,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 | `b.snap` | 全員の `[HP, 表示HP]`・ゲージ・キュー・窓の段数・演出中か。状態が変わったときと、戦闘中 1 秒ごと |
 | `b.end` | 戦闘の終了（結果、終了時の HP） |
 | `f.scene` / `f.move` / `f.warp` | 場面に入った / 32px のマスをまたいだ移動（毎フレームは取らない）/ ワープ |
-| `f.talk` / `f.event` | 会話・イベントの開始（`open: 1`）と終了（`open: 0`）。台詞の本文は記録しない |
+| `f.talk` / `f.event` | 会話・イベントの開始（`open: 1`）と終了（`open: 0`）。戦闘中セーブからの脚本制御の戦闘の再開では `resume: 1` が付く。台詞の本文は記録しない |
 | `f.menu` / `f.save` / `f.load` / `f.battle` | メニューの開閉、セーブ、ロード要求、戦闘の入退場 |
 | `err` | window の `error` / `unhandledrejection`（直後に同期で保存） |
 

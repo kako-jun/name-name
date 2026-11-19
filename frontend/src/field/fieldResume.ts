@@ -20,6 +20,8 @@ import { buildEnemyEntities } from '../game/encounter'
 import { hasOwn } from '../game/ownProperty'
 import type { BattleEngineOptions } from '../game/battleEngine'
 import type { FieldBattleConfig, FieldConfig } from './config'
+import type { BattleEntity } from '../game/spellDsl'
+import type { FieldScriptedBattleSetup } from '../game/fieldBattle'
 import { savedFormsOf } from './characterForms'
 
 /** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-<slot>` / `…-quick` */
@@ -305,4 +307,43 @@ export function resumeScriptedParty<P extends { id: string }>(
     if (m) out.push(structuredClone(m))
   }
   return out
+}
+
+/** 戦闘中のセーブから脚本制御の戦闘を再開する間だけ持つ値 (#1233)。最初の `startEventBattle(id)` が 1 回だけ使って消す */
+export interface PendingScriptedResume {
+  id: string
+  saved: RpgResolvedBattle
+  setup: FieldScriptedBattleSetup
+}
+
+/** `startBattle` に渡す引数（敵・セーブ・味方と脚本） */
+export interface ResumeBattleStart {
+  enemies: BattleEntity[]
+  saved: RpgResolvedBattle
+  party: BattleEntity[]
+  script: FieldScriptedBattleSetup['script']
+}
+
+/**
+ * `[戦闘: id]` の実行時、保留中の再開 (`pending`) を使えるか決めて `startBattle` の引数を返す (#1233)。
+ * `pending` の id が `id` と一致するときだけ引数を返し、不一致・保留なしは null（呼び出し側は通常の経路へ進む）。
+ * 呼び出し側は結果にかかわらず、この呼び出しの前に必ず `pending` を消す（1 回だけ使う）。
+ * 敵・値・ATB・脚本の進行はセーブから、脚本（rules・参戦）と初期編成は `pending.setup` から。味方は参戦済みを足した並び
+ */
+export function planScriptedResumeStart(
+  pending: PendingScriptedResume | null,
+  id: string,
+  currentParty: readonly BattleEntity[]
+): ResumeBattleStart | null {
+  if (!pending || pending.id !== id) return null
+  return {
+    enemies: pending.saved.enemies,
+    saved: pending.saved,
+    party: resumeScriptedParty(
+      pending.setup.party,
+      pending.saved.script?.joined ?? [],
+      currentParty
+    ),
+    script: pending.setup.script,
+  }
 }
