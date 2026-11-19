@@ -1850,6 +1850,8 @@ describe('BattleScreen: windowStyle (#744)', () => {
         const dark = build(darkOpts)
         const s = build(opts)
         rawPanelsOf(s).forEach((g, i) => {
+          // コマンド窓（1）は題名のぶん上辺の線が切れる (#1226)。別のテストで見る
+          if (i === 1) return
           const strokes = strokeOps(frameOf(g))
           expect(strokes).toHaveLength(1)
           const ds = strokeOps(panelsOf(dark)[i])[0]
@@ -1864,6 +1866,30 @@ describe('BattleScreen: windowStyle (#744)', () => {
           expect(strokes[0].shape.width).toBe(ds.shape.width)
           expect(strokes[0].shape.height).toBe(ds.shape.height)
         })
+      })
+
+      it('コマンド窓は題名（指示を出す味方の名前）のぶん上辺の枠線だけが切れ、背景・窓の大きさは変わらない (#1226)', () => {
+        const dark = build(darkOpts)
+        const s = build(opts)
+        const frame = strokeOps(frameOf(pi(s).commandPanel))
+        expect(frame).toHaveLength(1)
+        expect(frame[0].shape.type).toBe('polygon')
+        // 背景（帯の mask）は従来どおり閉じた角丸矩形で、dark の背景と同じ位置・寸法
+        const mask = fillOps(maskOf(pi(s).commandPanel))[0]
+        const dfill = fillOps(panelsOf(dark)[1])[0]
+        expect(mask.shape.type).toBe('roundedRectangle')
+        expect(mask.shape.x).toBe(dfill.shape.x)
+        expect(mask.shape.y).toBe(dfill.shape.y)
+        expect(mask.shape.width).toBe(dfill.shape.width)
+        expect(mask.shape.height).toBe(dfill.shape.height)
+      })
+
+      it('指示を出す味方がいる間だけ、コマンド窓に題名として名前が載る (#1226)', () => {
+        const s = build(opts)
+        const title = (pi(s) as unknown as { commandTitle: PixiText }).commandTitle
+        expect(title.visible).toBe(true)
+        expect(title.text).toBe('HERO')
+        expect(title.eventMode).toBe('none')
       })
 
       it('画面寸法・テキスト座標・子の数が dark と同一', () => {

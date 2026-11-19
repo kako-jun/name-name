@@ -271,6 +271,13 @@ import {
 } from './windowStyle'
 import { applyVictoryExp, type LevelUpDef } from './levelUp'
 import {
+  PANEL_CORNER_RADIUS,
+  placeWindowTitle,
+  WINDOW_TITLE_FONT_SIZE,
+  type PanelGap,
+  type WindowTitlePlacement,
+} from './windowTitle'
+import {
   BACKGROUND_TONE_BRIGHTNESS,
   BACKGROUND_TONE_SATURATION,
   saturationToPixiAmount,
@@ -302,7 +309,7 @@ import {
 const ENTRANCE_LOAD_TIMEOUT_MS = 1500
 const BG_DIM_ALPHA = 0.55
 /** パネルの角丸半径（dark / ff-blue 共通） */
-const PANEL_RADIUS = 6
+const PANEL_RADIUS = PANEL_CORNER_RADIUS
 const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
 /** ATB (#205): 行動する番の味方の名前色 / ゲージの色（溜まり中・満タン）/ ゲージの下地 */
@@ -915,6 +922,10 @@ export class BattleScreen extends Container {
   /** dark = Graphics（従来どおり）、ff-blue = 子 [帯, mask, 枠] を持つ Container（Pixi 8 の Graphics は子を持てないため） */
   private statsPanel: Container
   private commandPanel: Container
+  /** コマンド窓の題名 (#1226。いま指示を出している味方の名前)。窓の上辺の線を切って載せる */
+  private commandTitle: PixiText | null = null
+  private commandRect: { x: number; y: number; w: number; h: number } | null = null
+  private commandTitleKey = ''
   private logPanel: Container
   /** ff-blue パネルの子 Graphics（帯・mask・枠）。makePanel が 1 組だけ作り、drawPanel が使い回す */
   private ffBlueParts = new WeakMap<
@@ -1008,6 +1019,7 @@ export class BattleScreen extends Container {
       this.logPanel.on('pointertap', () => this.skipLogTyping())
     }
     this.buildCommandButtons()
+    this.buildCommandTitle()
     this.attachCrossKeys()
     // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
     if (this.layoutMode === 'front') this.buildLogLines()
@@ -1868,6 +1880,61 @@ export class BattleScreen extends Container {
     }
   }
 
+  private buildCommandTitle(): void {
+    const t = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_COMMAND) })
+    t.style.fontSize = WINDOW_TITLE_FONT_SIZE
+    t.anchor.set(0, 0.5)
+    t.eventMode = 'none'
+    t.visible = false
+    this.commandTitle = t
+    this.addChild(t)
+  }
+
+  /** コマンド窓の題名にする名前。いま指示を出している味方（コマンド待ちのとき）。いなければ空＝題名なし */
+  private commandTitleName(): string {
+    const s = this.engine.getState()
+    if (s.phase !== 'party-input') return ''
+    return s.party[this.engine.getCurrentActorIndex()]?.name ?? ''
+  }
+
+  /** コマンド窓（と題名）を描く。窓の rect は layout 側が決めたまま、上辺の線の切れ目と文字だけを足す (#1226) */
+  private drawCommandPanel(): void {
+    const r = this.commandRect
+    if (!r) return
+    const name = this.commandTitleName()
+    const place: WindowTitlePlacement | null = name
+      ? placeWindowTitle(r, name, PANEL_RADIUS, this.measure(name))
+      : null
+    this.drawPanel(this.commandPanel, r.x, r.y, r.w, r.h, false, place?.gap ?? null)
+    const t = this.commandTitle
+    if (!t) return
+    t.visible = place !== null
+    if (place) {
+      t.text = name
+      t.x = place.textX
+      t.y = place.centerY
+    }
+    this.commandTitleKey = place ? name : ''
+  }
+
+  /** 題名の文字の幅（概算と実測の大きい方。計測が取れない環境は概算） */
+  private measure(text: string): number {
+    const t = this.commandTitle
+    const est = estimateTextWidth(text, WINDOW_TITLE_FONT_SIZE)
+    if (!t) return est
+    try {
+      t.text = text
+      return Number.isFinite(t.width) ? Math.max(est, t.width) : est
+    } catch {
+      return est
+    }
+  }
+
+  /** 指示を出す味方が変わったら題名を描き直す */
+  private syncCommandTitle(): void {
+    if (this.commandTitleName() !== this.commandTitleKey) this.drawCommandPanel()
+  }
+
   /** そのコマンドを今選べるか。ATB (#205) ではにげるはゲージが溜まっていなくてもいつでも選べる */
   private isCommandEnabled(id: CommandId): boolean {
     // ff（従来ターン制）: 演出中は選べない (#745)
@@ -1964,6 +2031,7 @@ export class BattleScreen extends Container {
    * 上から積む）を、同じ角丸矩形の mask で切り抜き、その上に同形の白枠を重ねる。寸法・半径・枠線はどちらも同じ。
    * ff-blue の g は Container で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
    * 子は makePanel が 1 組だけ作って使い回す（再描画で mask が積み増されない）。
+   * `gap` を渡すと上辺の枠線だけをその範囲で切る (#1226。窓の題名の置き場。背景・帯・窓の大きさは変えない)。
    */
   private drawPanel(
     container: Container,
@@ -1971,7 +2039,8 @@ export class BattleScreen extends Container {
     y: number,
     w: number,
     h: number,
-    opaque = false
+    opaque = false,
+    gap?: PanelGap | null
   ): void {
     const parts = this.ffBlueParts.get(container)
     if (parts) {
@@ -1982,16 +2051,46 @@ export class BattleScreen extends Container {
           .rect(x, y + band.y, w, band.h)
           .fill({ color: band.color, alpha: opaque ? 1 : FF_BLUE_PANEL_ALPHA })
       }
-      parts.frame
-        .clear()
-        .roundRect(x, y, w, h, PANEL_RADIUS)
-        .stroke({ color: PANEL_STROKE, width: 2 })
+      parts.frame.clear()
+      this.strokePanelFrame(parts.frame, x, y, w, h, gap)
       return
     }
     const g = container as Graphics
     g.clear()
-    g.roundRect(x, y, w, h, PANEL_RADIUS)
-      .fill({ color: PANEL_BG, alpha: opaque ? 1 : PANEL_BG_ALPHA })
+    g.roundRect(x, y, w, h, PANEL_RADIUS).fill({
+      color: PANEL_BG,
+      alpha: opaque ? 1 : PANEL_BG_ALPHA,
+    })
+    this.strokePanelFrame(g, x, y, w, h, gap)
+  }
+
+  /** 窓の枠線。`gap` があれば上辺をその範囲で切った開いた線で、無ければ従来の閉じた角丸矩形 */
+  private strokePanelFrame(
+    g: Graphics,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    gap?: PanelGap | null
+  ): void {
+    const r = PANEL_RADIUS
+    // 切れ目は角にかからない範囲へ収める
+    const x0 = gap ? Math.max(x + r, gap.x0) : 0
+    const x1 = gap ? Math.min(x + w - r, gap.x1) : 0
+    if (!gap || x1 <= x0) {
+      g.roundRect(x, y, w, h, r).stroke({ color: PANEL_STROKE, width: 2 })
+      return
+    }
+    g.moveTo(x1, y)
+      .lineTo(x + w - r, y)
+      .arcTo(x + w, y, x + w, y + r, r)
+      .lineTo(x + w, y + h - r)
+      .arcTo(x + w, y + h, x + w - r, y + h, r)
+      .lineTo(x + r, y + h)
+      .arcTo(x, y + h, x, y + h - r, r)
+      .lineTo(x, y + r)
+      .arcTo(x, y, x + r, y, r)
+      .lineTo(x0, y)
       .stroke({ color: PANEL_STROKE, width: 2 })
   }
 
@@ -2069,7 +2168,8 @@ export class BattleScreen extends Container {
     }
 
     // コマンドパネル（4 コマンドを画面幅で均等割）
-    this.drawPanel(this.commandPanel, STAGE_PADDING, commandY, panelW, COMMAND_HEIGHT)
+    this.commandRect = { x: STAGE_PADDING, y: commandY, w: panelW, h: COMMAND_HEIGHT }
+    this.drawCommandPanel()
     // commands.length は固定 4。万一 0 になっても div by zero しないよう max(1) でガード
     const cmdW = panelW / Math.max(1, this.commands.length)
     for (let i = 0; i < this.commands.length; i++) {
@@ -2225,7 +2325,8 @@ export class BattleScreen extends Container {
     }
 
     // 下パネル: コマンド（左）
-    panel(L.command, this.commandPanel)
+    this.commandRect = { x: L.command.x, y: L.command.y, w: L.command.w, h: L.command.h }
+    this.drawCommandPanel()
     // 全コマンド共通で、いちばん狭いセルに最長ラベルが収まるフォントサイズにする
     const minCellW = L.commandCells.reduce((m, c) => Math.min(m, c.w), Infinity)
     const cmdFont = fitCommandFontSize(
@@ -2938,6 +3039,7 @@ export class BattleScreen extends Container {
       cmd.text.alpha = enabled ? 1 : 0.4
       cmd.hit.eventMode = enabled ? 'static' : 'none'
     }
+    this.syncCommandTitle()
     this.atbSignature = this.computeAtbSignature()
     this.drawAtbBars()
     if (this.presentation === 'ff') {
@@ -3001,7 +3103,8 @@ export class BattleScreen extends Container {
     }
     this.menuLayer = new BattleMenuLayer({
       makePanel: () => this.makePanel(),
-      drawPanel: (c, x, y, w, h, opaque) => this.drawPanel(c, x, y, w, h, opaque),
+      drawPanel: (c, x, y, w, h, opaque, gap) => this.drawPanel(c, x, y, w, h, opaque, gap),
+      listTitle: (kind) => this.commands.find((c) => c.id === kind)?.text.text ?? '',
       textStyle: () => this.themedStyle(TEXT_STYLE_COMMAND),
       handTexture: () => this.handTexture,
       onRowTap: (i) => {
