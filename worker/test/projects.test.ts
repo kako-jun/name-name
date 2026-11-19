@@ -125,4 +125,14 @@ describe("sit-by-me の登録 (#1135, scriptsDir は #1144)", () => {
     const p = body.projects.find((x) => x.name === "sit-by-me");
     expect(p).toMatchObject({ title: "Sit by Me", repo: "kako-jun/sit-by-me", scriptsDir: "play" });
   });
+
+  it("一覧の先頭に出る (#1219)。他のゲームの相対順は変えない", async () => {
+    const req = new Request("https://name-name-api.workers.dev/api/projects");
+    const res = await worker.fetch(req, ENV, ctx);
+    const body = (await res.json()) as { projects: Array<{ name: string }> };
+    const names = body.projects.map((x) => x.name);
+    expect(names[0]).toBe("sit-by-me");
+    expect(names[1]).toBe("ogurasia");
+    expect(names.indexOf("theo-hayami")).toBeLessThan(names.indexOf("treppenwitz"));
+  });
 });
