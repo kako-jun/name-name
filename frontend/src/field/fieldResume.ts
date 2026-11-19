@@ -179,9 +179,10 @@ export function itemNamesFromConfig(
 
 /**
  * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数に戦利品を足し、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換え、勝利なら経験値を生存者へ配る (#206)
- * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない
+ * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない。
+ * 戦闘中だけの状態（脚本の `固定`/`下限` が付ける `hpFloor`）は持ち越さない（残すと次の通常戦闘でも HP が下限から下がらない #1222）
  */
-export function carryOverBattleResult<P>(input: {
+export function carryOverBattleResult<P extends { hpFloor?: number }>(input: {
   outcome: string
   earnedGold: number
   menuItems: ReadonlyArray<{ id: string; count?: number }>
@@ -204,6 +205,8 @@ export function carryOverBattleResult<P>(input: {
   const party = structuredClone(
     (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
   )
+  // 戦闘中だけの状態は持ち越さない (#1222)
+  for (const m of party) delete m.hpFloor
   return {
     inventory,
     gold: input.before.gold + input.earnedGold,

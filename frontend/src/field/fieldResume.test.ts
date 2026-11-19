@@ -253,6 +253,25 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
     expect(r.inventory.potion).toBe(0)
   })
 
+  describe('戦闘中だけの状態 hpFloor は持ち越さない (#1222)', () => {
+    const floored = [{ id: 'a', hp: 1, hpFloor: 1 }]
+    const beforeFloored = { ...before, party: [{ id: 'a', hp: 20, hpFloor: 1 }] }
+    for (const outcome of ['victory', 'interrupted', 'escaped', 'defeat']) {
+      it(`${outcome}: 結果の味方に hpFloor が無く、渡した値は書き換えない`, () => {
+        const r = carryOverBattleResult({
+          outcome,
+          earnedGold: 0,
+          menuItems: [],
+          partyAfter: floored,
+          before: beforeFloored,
+        })
+        expect(r.party[0]).not.toHaveProperty('hpFloor')
+        expect(floored[0].hpFloor).toBe(1)
+        expect(beforeFloored.party[0].hpFloor).toBe(1)
+      })
+    }
+  })
+
   describe('戦利品 loot (#1126)', () => {
     const base = { earnedGold: 0, partyAfter: after, before }
 
