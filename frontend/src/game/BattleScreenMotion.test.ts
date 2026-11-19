@@ -337,7 +337,7 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
   }
   function playEnemyAttack(
     motion: 'snappy' | 'default',
-    kind: 'attack' | 'spell' = 'attack',
+    kind: 'attack' | 'spell' | 'skill' | 'item' = 'attack',
     bossHp = 999
   ) {
     const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0, hp: bossHp })], {
@@ -402,6 +402,24 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
   it('攻撃以外（spell）の敵は自己モザイクにならない', () => {
     const r = playEnemyAttack('snappy', 'spell')
     expect(r.esize.every((x) => x === null)).toBe(true)
+  })
+
+  it('自己モザイクの敵は、わざ・呪文・アイテムでも踏み出さず、構えのポーズは従来どおり (#1222)', () => {
+    for (const [kind, pose] of [
+      ['skill', 'special'],
+      ['spell', 'cast'],
+      ['item', 'ready'],
+    ] as const) {
+      const r = playEnemyAttack('snappy', kind)
+      expect(r.ex.every((x) => x === 0)).toBe(true)
+      expect(r.poses.has(pose)).toBe(true)
+    }
+  })
+
+  it('default（モザイク無効）の敵は、わざでも踏み出す (#1222)', () => {
+    const r = playEnemyAttack('default', 'skill')
+    expect(Math.max(...r.ex.map(Math.abs))).toBeGreaterThan(1)
+    expect(r.ex[r.ex.length - 1]).toBe(0)
   })
 
   it('倒れた敵の行動（死亡時の行動）では自己モザイクを出さない', () => {

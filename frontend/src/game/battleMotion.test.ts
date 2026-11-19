@@ -101,11 +101,14 @@ describe('sampleActor（攻撃は踏み出し→斬り→戻り）', () => {
     })
   })
 
-  it('呪文・アイテムは動かず構え（ready）', () => {
-    expect(sampleActor('spell', 100)).toEqual({ forward: 0, pose: 'cast' })
-    expect(sampleActor('item', 100)).toEqual({ forward: 0, pose: 'ready' })
+  it('呪文・アイテムは踏み出して構え（cast / ready）、castMs を過ぎたら戻って idle (#1222)', () => {
+    expect(sampleActor('spell', 0)).toEqual({ forward: 0, pose: 'cast' })
+    expect(sampleActor('spell', 100)).toMatchObject({ pose: 'cast' })
+    expect(sampleActor('spell', 100).forward).toBeGreaterThan(0)
+    expect(sampleActor('item', 100)).toMatchObject({ pose: 'ready' })
+    expect(sampleActor('item', 100).forward).toBeGreaterThan(0)
     expect(sampleActor('notice', 100)).toEqual({ forward: 0, pose: 'idle' })
-    expect(sampleActor('item', CAST_MS + 1)).toEqual({ forward: 0, pose: 'idle' })
+    expect(sampleActor('item', CAST_MS)).toEqual({ forward: 0, pose: 'idle' })
   })
 })
 

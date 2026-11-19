@@ -12,6 +12,7 @@ import {
   SUMMON_MS,
   RECOIL_MS,
   buildActionTimeline,
+  sampleActor,
   eventTimeline,
   sampleSummonCue,
 } from './battleMotion'
@@ -90,5 +91,16 @@ describe('sampleSummonCue', () => {
     expect(sampleSummonCue(1e9)).toMatchObject({ alpha: 0 })
     expect(sampleSummonCue(Number.NaN)).toMatchObject({ alpha: 0 })
     expect(sampleSummonCue(Number.POSITIVE_INFINITY)).toMatchObject({ alpha: 0 })
+  })
+})
+
+describe('召喚の使い手の踏み出し (#1222)', () => {
+  it('召喚の行動が castMs より長くても、使い手は castMs で戻り、以後は 0', () => {
+    const tl = eventTimeline(ev({ summon: { id: 'a', name: 'b' } }))
+    expect(tl.duration).toBeGreaterThan(CAST_MS)
+    expect(sampleActor('skill', CAST_HIT_MS).forward).toBeGreaterThan(0)
+    expect(sampleActor('skill', CAST_MS).forward).toBe(0)
+    expect(sampleActor('skill', CAST_MS + 100).forward).toBe(0)
+    expect(sampleActor('skill', tl.duration - 1).forward).toBe(0)
   })
 })

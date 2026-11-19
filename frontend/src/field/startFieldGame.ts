@@ -147,6 +147,7 @@ import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from
 import {
   baseConfigOf,
   carryOverBattleResult,
+  dropBattleOnlyState,
   mergePartyById,
   snapshotParty,
   composeNotice,
@@ -856,7 +857,12 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   let traceCell = { x: -1, y: -1 }
   // ---- RPG 状態 (#1021)。セーブ形式（game/rpgSave.ts）と同じ中身を実行時に持つ。戦闘のたびに設定へ戻さず、持ち越す ----
   const rpgBase = baseConfigOf(config)
-  let partyState = resumed ? resumed.party : config.party.map((p) => structuredClone(p))
+  // 戦闘の局面が無い再開（敵 id 不明などで戦闘が落ちた）なら、セーブ内の戦闘中だけの状態は次の通常戦闘へ持ち越さない (#1222)
+  let partyState = resumed
+    ? resumed.battle
+      ? resumed.party
+      : resumed.party.map((m) => dropBattleOnlyState(structuredClone(m)))
+    : config.party.map((p) => structuredClone(p))
   let inventory: Record<string, number> = resumed
     ? { ...resumed.inventory }
     : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
