@@ -20,7 +20,11 @@ import {
 } from './layers'
 import { BattleEngine, type BattleScriptOptions } from '../game/battleEngine'
 import type { BattleResult } from '../game/loot'
-import { createFieldBattleHost, planEventBattle } from '../game/fieldBattle'
+import {
+  createFieldBattleHost,
+  planEventBattle,
+  type FieldScriptedBattleSetup,
+} from '../game/fieldBattle'
 import { once } from '../game/once'
 import { createNpcMoveQueue, pickNpcByName, resolveNpcSpeed } from '../game/fieldNpcMove'
 import { BattleScreen } from '../game/BattleScreen'
@@ -156,8 +160,10 @@ import {
   itemNamesFromConfig,
   loadResume,
   mergeFlags,
+  planResumeBattle,
   resumeBackground,
   resumeBattleEngineOptions,
+  resumeScriptedParty,
 } from './fieldResume'
 import { SaveManager } from '../game/SaveManager'
 import {
@@ -922,6 +928,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         ...(st.script
           ? {
               script: {
+                id: st.script.id,
                 turn: st.script.turn,
                 fired: [...st.script.fired],
                 joined: [...st.script.joined],
@@ -1249,7 +1256,35 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
    * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）。
    * dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
    */
+  /** 戦闘中のセーブから脚本制御の戦闘を再開する間だけ入る (#1233)。最初の `startEventBattle(id)` が 1 回だけ使って消す */
+  let pendingResume: {
+    id: string
+    saved: RpgResolvedBattle
+    setup: FieldScriptedBattleSetup
+  } | null = null
   const startEventBattle = (id: string): Promise<BattleResult | null> => {
+    const resume = pendingResume
+    pendingResume = null
+    if (resume && resume.id === id) {
+      // 脚本（rules・参戦）と味方の初期編成は通常の経路と同じ setup から。敵・味方の値・ATB・脚本の進行・背景はセーブから戻す
+      return new Promise((resolve) => {
+        const done = once(resolve)
+        try {
+          startBattle(resume.saved.enemies, resume.saved, {
+            party: resumeScriptedParty(
+              resume.setup.party,
+              resume.saved.script?.joined ?? [],
+              partyState
+            ),
+            script: resume.setup.script,
+            onResult: done,
+          })
+        } catch (e) {
+          console.warn(`[field] 戦闘 '${id}' を再開できない`, e)
+          done(null)
+        }
+      })
+    }
     const plan = planEventBattle({
       id,
       battleScripts,
@@ -2460,6 +2495,39 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   window.addEventListener('pagehide', onPageHide)
   import.meta.hot?.dispose(dispose)
   // 戦闘中のセーブから再開した場合は、保存された戦闘中の局面をそのまま開く (#1021)
-  if (resumed?.battle) startBattle(resumed.battle.enemies, resumed.battle)
+  if (resumed?.battle) {
+    const saved = resumed.battle
+    const rp = planResumeBattle(saved, battleScripts)
+    let warning = rp.kind === 'plain' ? rp.warning : undefined
+    let started = false
+    if (rp.kind === 'script') {
+      // 通常の `[戦闘: id]` と同じ経路（イベント → startEventBattle）で開く。脚本・結果の フラグ=/次= が通常どおり働く (#1233)
+      const plan = planEventBattle({
+        id: rp.id,
+        battleScripts,
+        busy: false,
+        monsters: config.monsters,
+        party: partyState,
+        layout: config.battle.layout,
+        rng: Math.random,
+      })
+      if (plan.kind === 'start') {
+        pendingResume = { id: rp.id, saved, setup: plan.setup }
+        releaseWalkInput()
+        eventRun = true
+        conversation.start(rp.id, '', [{ type: 'Battle', id: rp.id }], () => {
+          eventRun = false
+        })
+        started = true
+      } else {
+        warning = `セーブの戦闘 '${rp.id}' を組み立てられないため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`
+      }
+    }
+    if (warning) {
+      console.warn(`[field] resume: ${warning}`)
+      setResumeNotice([resumeNotice, warning].filter(Boolean).join('\n'))
+    }
+    if (!started) startBattle(saved.enemies, saved)
+  }
   return dispose
 }

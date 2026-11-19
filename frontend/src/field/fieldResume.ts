@@ -257,3 +257,52 @@ export function snapshotParty<P extends { id: string }>(
 ): P[] {
   return inBattle ? mergePartyById(partyState, engineParty) : [...partyState]
 }
+
+/** 戦闘中のセーブの再開で何を開くか (#1233) */
+export type ResumeBattlePlan = { kind: 'script'; id: string } | { kind: 'plain'; warning?: string }
+
+/**
+ * 戦闘中のセーブから、脚本制御の戦闘 (`[戦闘 id]`) として開くか通常の戦闘として開くかを決める (#1233)。
+ * - `script.id` があり、脚本の宣言（`battleScripts`）にある → `script`（通常の `[戦闘: id]` と同じ経路で開く）
+ * - 通常の戦闘のセーブ（`script` なし）→ `plain`（警告なし）
+ * - 脚本の戦闘のセーブだが id が無い（旧セーブ）・宣言に無い id → `plain` + 警告（推測しない）
+ */
+export function planResumeBattle(
+  saved: Pick<RpgResolvedBattle, 'script'>,
+  battleScripts: Readonly<Record<string, unknown>> | undefined
+): ResumeBattlePlan {
+  const script = saved.script
+  if (!script) return { kind: 'plain' }
+  const id = script.id
+  if (id === undefined || id === '')
+    return {
+      kind: 'plain',
+      warning:
+        '脚本制御の戦闘のセーブですが、戦闘の id が無いため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）',
+    }
+  if (!battleScripts || !hasOwn(battleScripts, id))
+    return {
+      kind: 'plain',
+      warning: `セーブの戦闘 '${id}' の宣言（[戦闘 ${id}]）が無いため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`,
+    }
+  return { kind: 'script', id }
+}
+
+/**
+ * 脚本制御の戦闘を再開するときのエンジンの味方 (#1233)。初期編成（`味方:` の順）に、セーブ時点で参戦済み（`joined`）の味方を参戦順に足す。
+ * 参戦済みの者は戦闘を始めた時点ではエンジンに居ないので、ここで入れておかないと復元した `joined` と食い違う（居ないのに参戦済み）。
+ * 値は `all`（セーブから戻した味方）の同 id。居ない id は読み飛ばす。渡した値は書き換えない
+ */
+export function resumeScriptedParty<P extends { id: string }>(
+  initial: readonly P[],
+  joined: readonly string[],
+  all: readonly P[]
+): P[] {
+  const out = initial.map((p) => structuredClone(all.find((a) => a.id === p.id) ?? p))
+  for (const id of joined) {
+    if (out.some((p) => p.id === id)) continue
+    const m = all.find((a) => a.id === id)
+    if (m) out.push(structuredClone(m))
+  }
+  return out
+}
