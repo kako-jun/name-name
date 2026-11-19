@@ -350,6 +350,50 @@ describe('createFieldPreloader: 場面のまわりの先読み', () => {
     expect(t.warn.mock.calls[0][0]).toContain('broken')
   })
 
+  it('前の呼び出しが読み込み中の絵も、新しい呼び出しは完了を待ってから隣へ進む（現在 → 隣の順を崩さない）', async () => {
+    const t = setup()
+    // a の 1・2 段目を済ませ、3 段目（b1.png・c1.png）を読み込み中にする
+    const p1 = t.pre.around('a')
+    await flush()
+    t.last(t.imageDefs, 'a1.png').resolve()
+    t.last(t.imageDefs, 'a2.png').resolve()
+    await flush()
+    t.last(t.sceneDefs, 'b').resolve()
+    t.last(t.sceneDefs, 'c').resolve()
+    await flush()
+    expect(t.imageCalls).toEqual(['a1.png', 'a2.png', 'b1.png', 'c1.png'])
+    // b へ移る: b の絵（b1.png は読み込み中・a1.png は読めた）を待つ間は、b の隣の絵を読み始めない
+    const p2 = t.pre.around('b')
+    await flush()
+    expect(t.imageCalls).toEqual(['a1.png', 'a2.png', 'b1.png', 'c1.png']) // 重ねて要求もしない
+    t.last(t.imageDefs, 'c1.png').resolve()
+    await flush()
+    expect(t.imageCalls).toHaveLength(4) // b1.png がまだ
+    expect(t.sceneCalls).toEqual(['b', 'c'])
+    t.last(t.imageDefs, 'b1.png').resolve()
+    await flush()
+    // b の絵がそろってから、b の隣（a）を読む
+    expect(t.sceneCalls).toEqual(['b', 'c', 'a'])
+    t.last(t.sceneDefs, 'a').resolve()
+    await Promise.all([p1, p2])
+    // a の戦闘の絵は読み済みなので、新しい要求は無い
+    expect(t.imageCalls).toHaveLength(4)
+    expect(t.warn).not.toHaveBeenCalled()
+  })
+
+  it('stop() のあとは次の段へ進まず、新しい around も何も読まない（フィールドの破棄）', async () => {
+    const t = setup()
+    const p1 = t.pre.around('a')
+    await flush()
+    t.pre.stop()
+    t.imageDefs.forEach((ds) => ds.forEach((d) => d.resolve()))
+    await p1
+    expect(t.sceneCalls).toEqual([])
+    await t.pre.around('b')
+    expect(t.imageCalls).toEqual(['a1.png', 'a2.png'])
+    expect(t.sceneCalls).toEqual([])
+  })
+
   it('全部失敗しても解決する', async () => {
     const t = setup({
       loadImage: () => Promise.reject(new Error('net')),

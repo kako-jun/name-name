@@ -138,46 +138,70 @@ export interface FieldPreloadDeps {
  * 場面のまわりの素材の先読み (#1241)。`around(sceneId)` を場面に入るたびに呼ぶ。読む順は
  * ① いまの場面の戦闘の絵 → ② 隣の場面（背景・マスク・前面）→ ③ 隣の場面の戦闘の絵。段ごとに前の段を待つ（いまの場面を先に済ませる）。
  * 段の中は同時に読む。別の場面へ移って `around` が呼ばれ直したら、古い呼び出しは次の段へ進まない（読み始めた分は捨てない）。
- * 一度読みに行った絵の URL・場面は読み直さない（失敗したものは次の `around` で読み直す）。
- * 失敗は 1 件ずつ警告して先へ進む。返す Promise は必ず解決する
+ * 同じ URL・場面の読み込みは 1 本の Promise を共有する: 前の場面の呼び出しが読み始めた絵も、新しい呼び出しはその完了を待ってから次の段へ進む
+ * （読み込み中だからと飛ばすと、いまの場面の絵と隣の素材が回線を取り合う）。読めたものは読み直さず、失敗したものは共有から外して次の呼び出しで読み直す。
+ * 失敗は 1 件につき 1 回警告して先へ進む。返す Promise は必ず解決する。`stop()` のあとは何も読まない（フィールドの破棄時に呼ぶ）
  */
 export function createFieldPreloader(deps: FieldPreloadDeps): {
   around: (sceneId: string) => Promise<void>
+  stop: () => void
 } {
   let generation = 0
-  const requestedUrls = new Set<string>()
-  const requestedScenes = new Set<string>()
-  const loadImages = async (urls: readonly string[]): Promise<void> => {
-    const fresh = urls.filter((u) => !requestedUrls.has(u))
-    for (const u of fresh) requestedUrls.add(u)
-    await preloadBattleImages(fresh, (u) =>
-      deps.loadImage(u).catch((e: unknown) => {
-        requestedUrls.delete(u)
-        deps.warn(
-          `[field] 戦闘の絵を先読みできません（戦闘が開いたとき読み直します）: ${u} ${describe(e)}`
+  let stopped = false
+  const images = new Map<string, Promise<void>>()
+  const scenes = new Map<string, Promise<void>>()
+  /** key の読み込みを共有する。失敗は警告して共有から外す（次の呼び出しで読み直す）。返す Promise は必ず解決する */
+  const shared = (
+    table: Map<string, Promise<void>>,
+    key: string,
+    load: () => Promise<unknown>,
+    warning: (e: unknown) => string
+  ): Promise<void> => {
+    let p = table.get(key)
+    if (!p) {
+      p = Promise.resolve()
+        .then(load)
+        .then(
+          () => {},
+          (e: unknown) => {
+            table.delete(key)
+            deps.warn(warning(e))
+          }
         )
-        throw e
-      })
+      table.set(key, p)
+    }
+    return p
+  }
+  const loadImages = async (urls: readonly string[]): Promise<void> => {
+    await Promise.all(
+      [...new Set(urls)].map((u) =>
+        shared(
+          images,
+          u,
+          () => deps.loadImage(u),
+          (e) =>
+            `[field] 戦闘の絵を先読みできません（戦闘が開いたとき読み直します）: ${u} ${describe(e)}`
+        )
+      )
     )
   }
   const loadScenes = async (ids: readonly string[]): Promise<void> => {
-    const fresh = ids.filter((id) => !requestedScenes.has(id))
-    for (const id of fresh) requestedScenes.add(id)
-    await Promise.allSettled(
-      fresh.map((id) =>
-        deps.loadScene(id).catch((e: unknown) => {
-          requestedScenes.delete(id)
-          deps.warn(
-            `[field] 隣の場面 ${id} を先読みできません（移るとき読み直します）: ${describe(e)}`
-          )
-        })
+    await Promise.all(
+      ids.map((id) =>
+        shared(
+          scenes,
+          id,
+          () => deps.loadScene(id),
+          (e) => `[field] 隣の場面 ${id} を先読みできません（移るとき読み直します）: ${describe(e)}`
+        )
       )
     )
   }
   return {
     around: async (sceneId) => {
+      if (stopped) return
       const gen = ++generation
-      const current = () => gen === generation
+      const current = () => !stopped && gen === generation
       try {
         await loadImages(deps.battleUrls(sceneId))
         if (!current()) return
@@ -186,9 +210,13 @@ export function createFieldPreloader(deps: FieldPreloadDeps): {
         if (!current()) return
         await loadImages(next.flatMap((id) => deps.battleUrls(id)))
       } catch (e) {
-        // 組み立て側の想定外の例外も、先読みの失敗として警告するだけ（歩行・戦闘を止めない）
+        // 読み込みの失敗は shared が警告して握るので、ここに来るのは組み立て側（battleUrls・neighbors）の想定外の例外だけ。
+        // それも警告するだけ（歩行・戦闘を止めない）
         deps.warn(`[field] 先読みを中断しました: ${describe(e)}`)
       }
+    },
+    stop: () => {
+      stopped = true
     },
   }
 }

@@ -2483,6 +2483,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
     disposed = true
+    fieldPreloader.stop()
     contain.dispose()
     battleTransition.cancel()
     playerStand?.destroy()

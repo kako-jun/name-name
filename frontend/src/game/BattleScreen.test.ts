@@ -25,7 +25,12 @@ import {
   DOF_MAX_BLUR_STRENGTH,
   computeDofLevels,
 } from './depthOfField'
-import { BattleScreen, applyBattleTextureFilter, type BattleScreenOptions } from './BattleScreen'
+import {
+  BattleScreen,
+  ENTRANCE_LOAD_TIMEOUT_MS,
+  applyBattleTextureFilter,
+  type BattleScreenOptions,
+} from './BattleScreen'
 import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -3554,7 +3559,7 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       await flushPromises()
       await flushPromises()
       // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-      s.tick(1500)
+      s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
       s.tick(200)
       return { s, engine, v: views(s) }
     }
@@ -3662,7 +3667,7 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
         await flushPromises()
         await flushPromises()
         // 登場スライド (#1037) を済ませる
-        s.tick(1500)
+        s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
         s.tick(200)
         engine.selectAttack()
         s.redraw(800, 450)
