@@ -186,7 +186,7 @@ import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
-import { applyGearStats, removeGearStats, type GearStatDelta } from '../game/gearStats'
+import { applyGearStats, clampToGear, removeGearStats, type GearStatDelta } from '../game/gearStats'
 import { ensureFontLoaded } from '../game/FontLoader'
 import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
@@ -908,9 +908,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     : resumed
       ? structuredClone(resumed.equipment)
       : {}
-  // 装備の能力値 (#1234)。partyState は装備を含まない素の値のまま持ち（セーブもこの値）、戦闘に渡す味方とステータスの表示はここで装備を足して作る
+  // 装備の能力値 (#1234)。partyState は装備を含まない素の値のまま持ち（セーブもこの値）、戦闘に渡す味方とステータスの表示はここで装備を足して作る。
+  // 現在 HP / MP だけは絶対値（装備込みの最大値まで回復した値が、素の maxHp / maxMp を超えて残りうる）
   const gearStatsInput = { shop: config.gearShop, equipment }
-  /** ステータスに出す装備込みの味方（戦闘を始めるときと同じ値） */
+  /** 装備込みの味方（戦闘を始めるときと同じ値。セーブスロットの表示に使う） */
   const equippedParty = (): BattleEntity[] => applyGearStats(partyState, gearStatsInput).party
   let gold = resumed ? resumed.gold : 0
   // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps。全画面メニューを設定したゲームだけ書く）。
@@ -1157,7 +1158,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         for (const [key, member] of Object.entries(script.joiners)) {
           const r = applyGearStats([member], gearStatsInput)
           safeAssign(joiners, key, r.party[0])
-          Object.assign(gearDeltas, r.deltas)
+          // 初期編成にすでにいる id の分は上書きしない（戦闘後の書き戻しは初期編成の足した分で戻す）
+          for (const [id, d] of Object.entries(r.deltas))
+            if (!hasOwn(gearDeltas, id)) safeAssign(gearDeltas, id, d)
         }
         script = { ...script, joiners }
       }
@@ -1680,7 +1683,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           bgm: false,
           se: () => Object.keys(opts.sounds ?? {}).length > 0,
           getParty: () => partyState,
-          statusParty: equippedParty,
+          // どうぐ・まほうの判定と効果・ステータスは装備込みの味方で行い、結果は素の値へ戻して partyState に書く (#1234)
+          gearStats: () => gearStatsInput,
           setParty: (p) => {
             partyState = p
           },
@@ -1705,6 +1709,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
                   getFlags: () => flags,
                   setEquipment: (member: string, list: string[]) => {
                     safeAssign(equipment, member, list)
+                    // 外して最大値が下がったら、現在 HP / MP を新しい装備込みの最大値まで切り詰める (#1234)
+                    partyState = clampToGear(partyState, gearStatsInput)
                   },
                   ...(config.battle.currencyName
                     ? { currencyName: config.battle.currencyName }
@@ -2361,6 +2367,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       ? foregroundCoverage(scene.foreground.mask, pos, Math.abs(tex.width * s), tex.height * s)
       : 0
     setInfo(
+      // party= の hp/maxHp は partyState の素の値（装備を含まない最大値。現在値は絶対値なので maxHp を超えうる、#1234）
       `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}  gold=${gold} party=${partyState.map((m) => `${m.name}${m.hp}/${m.maxHp}`).join(',')}${scene.foreground ? `  前面に隠れる=${(hidden * 100).toFixed(0)}%` : ''}`
     )
   })
