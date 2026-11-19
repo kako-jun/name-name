@@ -186,7 +186,13 @@ import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
-import { applyGearStats, clampToGear, removeGearStats, type GearStatDelta } from '../game/gearStats'
+import {
+  applyGearStats,
+  clampToGear,
+  growWithGear,
+  removeGearStats,
+  type GearStatDelta,
+} from '../game/gearStats'
 import { ensureFontLoaded } from '../game/FontLoader'
 import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
@@ -1283,9 +1289,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       // 装備の分を引いた素の値で書き戻す (#1234。戦闘ごとに加算が積み上がらない。HP の減り・成長・状態は残る)
       partyAfter: removeGearStats(run.engine.getState().party, run.gearDeltas),
       before: { inventory, gold, party: partyState },
-      // 勝利の経験値は生存者へ等分してレベルアップ (#206)。リザルトの表示と同じ関数
+      // 勝利の経験値は生存者へ等分してレベルアップ (#206)。リザルトの表示と同じ関数。
+      // 成長は装備込みの味方に対して行い素の値へ戻す（素の最大値で切り詰めて装備の HP / MP を失わない、#1234）。敗北は戦闘前の素の値のままで grow を通らない
       exp,
-      grow: growPartyByExp(config.levelUp),
+      grow: growWithGear(growPartyByExp(config.levelUp), gearStatsInput),
     })
     inventory = next.inventory
     gold = next.gold

@@ -138,3 +138,19 @@ export function clampToGear(party: readonly BattleEntity[], input: GearStatsInpu
     return m
   })
 }
+
+/**
+ * 勝利の経験値の配り方（`growPartyByExp`）を、装備込みの味方に対して行うよう包む。戦闘後の持ち越しの `grow` に渡す。
+ * 素の値（`removeGearStats` 後。現在値は素の最大値を超えてよい）に装備を足し直してから成長させ、足した分を引いて素の値へ戻す。
+ * こうしないと共有の `levelUp` が素の最大値で現在値を切り詰め、装備で増えた HP / MP を失う（リザルト画面の値ともずれる）。
+ * 成長は装備込みの最大値に足され、戻すと素の最大値にそのまま残る。渡した味方は書き換えない
+ */
+export function growWithGear(
+  grow: (party: BattleEntity[], exp: number) => BattleEntity[],
+  input: GearStatsInput
+): (party: BattleEntity[], exp: number) => BattleEntity[] {
+  return (party, exp) => {
+    const { party: equipped, deltas } = applyGearStats(party, input)
+    return removeGearStats(grow(equipped, exp), deltas)
+  }
+}

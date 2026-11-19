@@ -5,7 +5,14 @@
  * 現在 HP / MP は絶対値で、装備は最大値だけを変える（足すときは装備込みの最大値で切り詰めるだけ・戻すときはそのまま）
  */
 import { describe, expect, it } from 'vitest'
-import { applyGearStats, clampToGear, removeGearStats, type GearStatsInput } from './gearStats'
+import {
+  applyGearStats,
+  clampToGear,
+  growWithGear,
+  removeGearStats,
+  type GearStatsInput,
+} from './gearStats'
+import { growPartyByExp, type LevelUpDef } from './levelUp'
 import { parseRpgSave, resolveRpg, snapshotRpg, type RpgBaseConfig } from './rpgSave'
 import { BattleEngine } from './battleEngine'
 import { carryOverBattleResult, snapshotParty } from '../field/fieldResume'
@@ -287,6 +294,53 @@ describe('セーブ → 再開で装備込みの値が元どおり (#1234)', () 
       base
     )
     expect(resolved.party[0]).toMatchObject({ hp: 50, maxHp: 50, mp: 9, maxMp: 9 })
+  })
+})
+
+describe('勝利のレベルアップで装備の HP / MP を失わない (#1234)', () => {
+  const eq = input({ a: ['plate'] })
+  const defs: Record<string, LevelUpDef> = { a: { expTable: [10], growth: 'hp+3, mp+2' } }
+  const grow = growWithGear(growPartyByExp(defs), eq)
+  const carry = (outcome: string, partyState: BattleEntity[], hitHp = 0) => {
+    const { party, deltas } = applyGearStats(partyState, eq)
+    party[0].hp -= hitHp
+    return carryOverBattleResult({
+      outcome,
+      earnedGold: 0,
+      menuItems: [],
+      partyAfter: removeGearStats(party, deltas),
+      before: { inventory: {}, gold: 0, party: partyState },
+      exp: 10,
+      grow,
+    }).party
+  }
+
+  it('装備込みで満タン 40/40・12/12 の味方が勝ってレベルアップ → 持ち越し → 足し直すと 43/43・14/14（リザルトと同じ）', () => {
+    const after = carry('victory', [member('a', { hp: 40, maxHp: 30, mp: 12, maxMp: 8 })])
+    expect(after[0]).toMatchObject({ hp: 43, maxHp: 33, mp: 14, maxMp: 10, level: 2 })
+    expect(applyGearStats(after, eq).party[0]).toMatchObject({
+      hp: 43,
+      maxHp: 43,
+      mp: 14,
+      maxMp: 14,
+    })
+  })
+
+  it('減っている味方の成長も装備込みで足される（20/40 → 23/43）', () => {
+    const after = carry('victory', [member('a', { hp: 40, maxHp: 30 })], 20)
+    expect(applyGearStats(after, eq).party[0]).toMatchObject({ hp: 23, maxHp: 43 })
+  })
+
+  it('敗北は戦闘前の素の値のまま（装備の分を二重に引かない）', () => {
+    const before = [member('a', { hp: 40, maxHp: 30, mp: 12, maxMp: 8 })]
+    const after = carry('defeat', before, 35)
+    expect(after[0]).toEqual(before[0])
+    expect(applyGearStats(after, eq).party[0]).toMatchObject({
+      hp: 40,
+      maxHp: 40,
+      mp: 12,
+      maxMp: 12,
+    })
   })
 })
 
