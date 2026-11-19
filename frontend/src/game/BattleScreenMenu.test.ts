@@ -14,7 +14,7 @@ import {
   TextureSource,
   type Container,
 } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, ENTRANCE_LOAD_TIMEOUT_MS, type BattleScreenOptions } from './BattleScreen'
 import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import { buildMenuRows, type BattleMenuData, type MenuStack } from './battleMenu'
@@ -74,9 +74,9 @@ function build(
     })
   )
   created.push(s)
-  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
+  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り ENTRANCE_LOAD_TIMEOUT_MS + 登場 200ms）。登場中は入力が塞がるため
   if (opts.motion === 'snappy' && opts.presentation === 'ff') {
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
   }
   return { s, engine }

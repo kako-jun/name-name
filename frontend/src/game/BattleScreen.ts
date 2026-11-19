@@ -306,8 +306,13 @@ import {
   type BattleLogTypewriterMode,
 } from './battleLogTypewriter'
 
-/** 登場スライド (#1037): 絵の読み込みが終わらなくても、tick の積算がこの ms に達したら見切って開始する */
-const ENTRANCE_LOAD_TIMEOUT_MS = 1500
+/**
+ * 登場スライド (#1037): 絵の読み込みが終わらなくても、tick の積算がこの ms に達したら見切って開始する。
+ * 読み込み中の敵・味方は色の四角（fallback）で描かれるので、見切りが短いと低速回線で「赤い矩形のまま登場して戦闘が進む」(#1241)。
+ * 絵がそろうまで画面外で待たせる（背景・窓は先に出る。待つ間は入力・ATB も止まる）ほうを取り、見切りは止まった通信から抜けるための上限にする。
+ * 読み込みの失敗は即 settled になるので、この長さを待つのは通信が終わらないときだけ
+ */
+export const ENTRANCE_LOAD_TIMEOUT_MS = 10000
 const BG_DIM_ALPHA = 0.55
 /** パネルの角丸半径（dark / ff-blue 共通） */
 const PANEL_RADIUS = PANEL_CORNER_RADIUS

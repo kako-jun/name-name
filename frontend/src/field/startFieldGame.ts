@@ -143,7 +143,14 @@ import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { firstRejection, settleStartup } from './startupSettle'
-import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from './battlePreload'
+import {
+  collectBattlePreloadUrls,
+  createFieldPreloader,
+  firstAutoBattleId,
+  neighborSceneIds,
+  preloadBattleImages,
+  sceneEncounterGroups,
+} from './battlePreload'
 import {
   baseConfigOf,
   carryOverBattleResult,
@@ -156,6 +163,9 @@ import {
   itemNamesFromConfig,
   loadResume,
   mergeFlags,
+  planResumeBattle,
+  planScriptedResumeStart,
+  type PendingScriptedResume,
   resumeBackground,
   resumeBattleEngineOptions,
 } from './fieldResume'
@@ -576,6 +586,20 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     antialias: false,
     autoDensity: true,
   })
+  /** 場面 `sid` で起こる戦闘の先読み URL（#1219 冒頭の戦闘・#1241 エンカウント共通。戦闘背景は場面の解決順どおり） */
+  const battlePreloadUrls = (
+    sid: string,
+    enemyGroups: readonly (string | undefined)[],
+    party: readonly BattleEntity[]
+  ): string[] =>
+    collectBattlePreloadUrls({
+      enemyGroups,
+      monsters: config.monsters,
+      party,
+      background: resolveBattleBackground(config.scenes[sid], config.battle.background),
+      effectImages: Object.values(config.battle.effects ?? {}).flatMap((e) => (e ? [e.image] : [])),
+      uiImages: [config.ui?.handImage, config.ui?.selectMarkImage],
+    })
   // 冒頭の戦闘の素材の先読み (#1219)。脚本が読めたら、開始場面に入ってすぐ戦闘になる作品だけ、
   // フィールドを見せている間に戦闘の背景・敵・味方の絵を読んでおく（失敗しても何も起きない。戦闘が自分で読み直す）
   void pScript
@@ -591,16 +615,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           ? battleScripts[id]
           : undefined
       if (!def) return
-      const urls = collectBattlePreloadUrls({
-        def,
-        monsters: config.monsters,
-        party: resumed ? resumed.party : config.party,
-        background: resolveBattleBackground(config.scenes[startSceneId], config.battle.background),
-        effectImages: Object.values(config.battle.effects ?? {}).flatMap((e) =>
-          e ? [e.image] : []
-        ),
-        uiImages: [config.ui?.handImage, config.ui?.selectMarkImage],
-      })
+      const urls = battlePreloadUrls(
+        startSceneId,
+        [def.enemies],
+        resumed ? resumed.party : config.party
+      )
       return preloadBattleImages(urls, (u) => Assets.load(u))
     })
     .catch(() => {}) // 先読みは最適化だけ。脚本の失敗は下の join が本来どおり扱う
@@ -932,6 +951,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         ...(st.script
           ? {
               script: {
+                id: st.script.id,
                 turn: st.script.turn,
                 fired: [...st.script.fired],
                 joined: [...st.script.joined],
@@ -1269,33 +1289,49 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     // 脚本制御の戦闘は一部の味方だけが出る (#1073)。出なかった味方は戦闘前のまま残す
     partyState = partial ? mergePartyById(partyState, next.party) : next.party
   }
+  /** 戦闘中のセーブから脚本制御の戦闘を再開する間だけ入る (#1233)。最初の `startEventBattle(id)` が 1 回だけ使って消す */
+  let pendingResume: PendingScriptedResume | null = null
   /**
    * 脚本の `[戦闘: id]` (#1073)。`[戦闘 id]` の宣言から組んだ戦闘を始め、フィールドへ戻ったら戦闘の結果（`script` に結果フラグ・`次=`）で解決する。
    * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）。
    * dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
    */
   const startEventBattle = (id: string): Promise<BattleResult | null> => {
-    const plan = planEventBattle({
-      id,
-      battleScripts,
-      busy: !!battle || !!battleRun || battleTransition.active,
-      monsters: config.monsters,
-      party: partyState,
-      layout: config.battle.layout,
-      rng: Math.random,
-    })
-    if (plan.kind === 'skip') return Promise.resolve(null)
+    // 再開用の保留は結果にかかわらず必ずここで消す（1 回だけ使う）
+    const resume = pendingResume
+    pendingResume = null
+    // 再開: 脚本・初期編成は通常の経路と同じ setup から、敵・味方の値・ATB・脚本の進行・背景はセーブから戻す。
+    // id が一致しなければ捨てて通常の経路へ
+    const resumed = planScriptedResumeStart(resume, id, partyState)
+    let enemies: BattleEntity[]
+    let saved: RpgResolvedBattle | null
+    let party: BattleEntity[]
+    let script: BattleScriptOptions
+    if (resumed) {
+      ;({ enemies, saved, party, script } = resumed)
+    } else {
+      const plan = planEventBattle({
+        id,
+        battleScripts,
+        busy: !!battle || !!battleRun || battleTransition.active,
+        monsters: config.monsters,
+        party: partyState,
+        layout: config.battle.layout,
+        rng: Math.random,
+      })
+      if (plan.kind === 'skip') return Promise.resolve(null)
+      enemies = plan.setup.enemies
+      saved = null
+      party = plan.setup.party
+      script = plan.setup.script
+    }
     return new Promise((resolve) => {
       // 正常終了の経路と例外の経路の両方から呼ばれうるので、必ず 1 回だけ
       const done = once(resolve)
       try {
-        startBattle(plan.setup.enemies, null, {
-          party: plan.setup.party,
-          script: plan.setup.script,
-          onResult: done,
-        })
+        startBattle(enemies, saved, { party, script, onResult: done })
       } catch (e) {
-        console.warn(`[field] 戦闘 '${id}' を始められない`, e)
+        console.warn(`[field] 戦闘 '${id}' を${resumed ? '再開' : '始め'}られない`, e)
         done(null)
       }
     })
@@ -1535,8 +1571,20 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
 
   /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
   const npcChecked = new Set<string>()
+  // 場面のまわりの先読み (#1241)。場面に入るたび（起動・端の出口・ワープ）、その場面のエンカウントの戦闘の絵 → 隣の場面 → 隣のエンカウントの絵の順に読む
+  const fieldPreloader = createFieldPreloader({
+    battleUrls: (sid) => {
+      const groups = sceneEncounterGroups(config.scenes[sid])
+      return groups.length > 0 ? battlePreloadUrls(sid, groups, partyState) : []
+    },
+    loadImage: (u) => Assets.load(u),
+    loadScene: ensureScene,
+    neighbors: (sid) => neighborSceneIds(config.scenes, sid),
+    warn: (m) => console.warn(m),
+  })
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    void fieldPreloader.around(s.id)
     traceRec('f.scene', { id: s.id, x: Math.round(pos.x), y: Math.round(pos.y) })
     // 場面が変わったら進行中の NPC 移動は打ち切る（resolve してイベントを止めたままにしない）
     npcMoves.clear()
@@ -2462,6 +2510,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
     disposed = true
+    fieldPreloader.stop()
     contain.dispose()
     battleTransition.cancel()
     playerStand?.destroy()
@@ -2487,6 +2536,52 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   window.addEventListener('pagehide', onPageHide)
   import.meta.hot?.dispose(dispose)
   // 戦闘中のセーブから再開した場合は、保存された戦闘中の局面をそのまま開く (#1021)
-  if (resumed?.battle) startBattle(resumed.battle.enemies, resumed.battle)
+  if (resumed?.battle) {
+    const saved = resumed.battle
+    const rp = planResumeBattle(saved, battleScripts)
+    let warning = rp.kind === 'plain' ? rp.warning : undefined
+    let started = false
+    if (rp.kind === 'script') {
+      // 通常の `[戦闘: id]` と同じ経路（イベント → startEventBattle）で開く。脚本・結果の フラグ=/次= が通常どおり働く (#1233)
+      const plan = planEventBattle({
+        id: rp.id,
+        battleScripts,
+        busy: false,
+        monsters: config.monsters,
+        party: partyState,
+        layout: config.battle.layout,
+        rng: Math.random,
+      })
+      if (plan.kind === 'start') {
+        // 再開でも planEventBattle は敵を組む（組んだ敵は捨てる。マスターが変わって組めないときはここで plain に落ちる）。
+        // 使うのは脚本 (rules・参戦) と初期編成だけで、敵・値はセーブから戻す
+        pendingResume = { id: rp.id, saved, setup: plan.setup }
+        releaseWalkInput()
+        eventRun = true
+        traceRec('f.event', { id: rp.id, open: 1, resume: 1 })
+        conversation.start(rp.id, '', [{ type: 'Battle', id: rp.id }], () => {
+          eventRun = false
+          traceRec('f.event', { id: rp.id, open: 0, resume: 1 })
+        })
+        // 実行器が動作中などで start が黙って何もしなかった（保留が消費されていない）ときは通常の戦闘に落とす
+        if (pendingResume) {
+          pendingResume = null
+          // onEnd が走っていない（eventRun が true のまま）ときだけ、先に記録した open:1 の対を閉じる（二重記録しない）
+          if (eventRun) traceRec('f.event', { id: rp.id, open: 0, resume: 1 })
+          eventRun = false
+          warning = `セーブの戦闘 '${rp.id}' のイベントを開始できないため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`
+        } else {
+          started = true
+        }
+      } else {
+        warning = `セーブの戦闘 '${rp.id}' を組み立てられないため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`
+      }
+    }
+    if (warning) {
+      console.warn(`[field] resume: ${warning}`)
+      setResumeNotice([resumeNotice, warning].filter(Boolean).join('\n'))
+    }
+    if (!started) startBattle(saved.enemies, saved)
+  }
   return dispose
 }

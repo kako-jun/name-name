@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture, TextureSource } from 'pixi.js'
-import { BattleScreen } from './BattleScreen'
+import { BattleScreen, ENTRANCE_LOAD_TIMEOUT_MS } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { skipEntrance } from './battleScreenTestUtil'
 import type { BattleEntity } from './spellDsl'
@@ -70,7 +70,7 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
   it('off（既定）: 何も記録しない', async () => {
     const { s, engine } = build()
     await flush()
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     engine.selectAttack()
     for (let i = 0; i < 100; i++) s.tick(50)
@@ -82,7 +82,7 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
     const { s, engine } = build()
     await flush()
     // 登場スライドを済ませる
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     // 敵に殴らせて hero を倒す（従来ターン制: 自分の番に攻撃 → 敵の番）
     engine.selectAttack()
@@ -153,7 +153,7 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
     configureTrace(true, { storage: null })
     const { s } = build(false)
     await flush()
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     ;(s as unknown as { handleCommand(id: string): void }).handleCommand('attack')
     const cmds = ofKind('b.in').map((e) => e.d as { src: string; v: string })
@@ -225,7 +225,7 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
     })
     created.push(s)
     await flush()
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     engine.selectAttack()
     for (let i = 0; i < 300 && !engine.isOver(); i++) s.tick(50)

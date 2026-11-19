@@ -356,6 +356,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 敵のレベル (#1043): `monsters.<id>.level`（整数。1〜99 に丸める。`レベル:` 相当。レベル条件の即死 `damage_full レベル倍数=N`・調整 `level +N|-N|=N` が使う。#898）。台帳に敵のレベルが無いのでデモは作らず、自動テスト（`enemyLevel.test.ts`）で確認する
 - 敵の大きさと隊形 (#839): `monsters.<id>` に `size`（`"2x1"` 形式の幅x高さ、整数 1 以上。不正値は設定エラー）と `scale`（数値、0.25〜1 に丸める）、`battle` に `enemyGrid`（`"6x2"` 形式、不正値は無効＝従来の配置）と `enemyWindowOverlap`（0〜0.5）を書ける。`enemyGrid` が有効なときは、読み込み時に全シーンの `groups` を検証し、敵グリッドに収まらない群を抽選から外して `console.error` と画面のエラー表示に一覧を出す（書式と意味は [敵の隊形ガイド](./enemy-formation.md)）
 - 画面下の表示（`encounter=貯めた距離/刻み 抑制=経過/最低`、`lastBattle`）で状態を確認できる
+- 素材の先読み (#1241): 場面に入るたび、その場面の `groups` に出る全種類の敵・戦闘背景・いまの味方の絵（とエフェクト・UI の絵）を、戦闘になる前に読んでおく（初めての敵が読み込み前の色の四角で登場しないように）。続けて端の出口（`links`）でつながる隣の場面の背景・マスク・前面と、その場面の敵の絵も読む（隣より先は読まない。ワープの行き先は対象外）。読めなかったものは `[field] … を先読みできません` と警告して続け、戦闘・場面の移動のときに読み直す。それでも絵が間に合わないとき（場面に入ってすぐのエンカウント・低速回線）は、戦闘画面（ff の登場スライド）が絵のそろうまで最大 10 秒、敵・味方を画面外で待たせる（背景・窓は先に出る。読み込み中の案内は出ない）。登場スライドの無い表示方式（dq・front）は先読みだけが対策で、間に合わなければ従来どおり色の四角から始まる。仕組みは architecture.md の「フィールドのエンカウントと隣の場面の先読み (#1241)」
 - 純粋関数は `frontend/src/game/fieldEncounter.ts`（`advanceEncounter`・`initialEncounterState`・`afterBattleState`。乱数は注入）
 
 ### 戦闘の候補窓・ポーズの確認（#890）
@@ -364,7 +365,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - `spells`: 味方全員が使える呪文の配列。書式は戦闘設定 JSON と同じ（`name` 必須・`id` 省略は連番・`mp`・`target`・`effect` / `builtin`）。`items`: 試作用の所持品の配列（`name` 必須・`effect` / `builtin`・`count`）。`count` は所持数で、小数は切り捨て・負数は 0、省略すると所持数の管理なし（無限・「×」表示なし）。`count` が 0 のアイテムはグレーで、決定すると「もっていない！」と出て窓は閉じない。使うたびに 1 減り、戦闘が終わると残数を持ち越す（#1021。初期値は設定の `count`、`?resume=` で再開したときはセーブの値。本編の inventory とは連動しない）
 - `skills`（#873）: 「わざ」の候補の配列（味方全員共通。`name` 必須・`id` 省略は連番・`target`〔特技の相対表現: `相手単体`（既定）/ `相手全体` / `仲間単体` / `仲間全体` / `自分`〕・`effect` / `builtin`）。MP は持たない。`battle.commands`: `["skill", "spell", "item", "escape"]` のようにコマンドの構成と順序を指定する（id は `attack` / `skill` / `spell` / `item` / `escape`。重複・未知の id・空配列は読み込みエラー。未指定は従来の attack / spell / item / escape）。順序が配置順で、`cross` の十字キーも位置で決まる
 - 候補窓は `layout: "side"` のとき `battle.commandLayout` が `grid` でも `cross` でも出る（コマンドの矢印キー決定は `cross` のときだけ）。十字キーは並びの位置で決まる（既定の並びなら 上=たたかう・左=じゅもん・右=どうぐ・下=にげる）。未指定は空＝じゅもん・どうぐの窓は開かない（従来どおり）。MP 不足の呪文はグレーで、決定すると「MPが たりない！」。指せる対象がいない（敵が全員倒れている・手の指す敵が倒れている）ときは「たいしょうがいない！」と出て、窓は閉じず MP・所持数も減らない
-- セーブから再開する (#1021): `field.html?resume=<0|1|2|quick>`（旧経路。現行は `/play/sit-by-me?resume=<slot>` で、キーは `name-name-save-sit-by-me-<slot>`）。localStorage のセーブ（キー `name-name-save-field-<slot>`）の `rpg` を読み、パーティ・所持品・所持金・現在地（絵・座標・向き・フラグ）・戦闘中状態（敵・HP・状態異常・ATB ゲージ・コマンド待ちの順・敵の記憶）をその局面から再開する。書き方・例・実機の手順は [状態を用意して起動する](./resume-demo.md)。`window.field.rpg()` が今の局面をセーブ形式で返し、`saveRpg(slot)` が書き込む（同じ形式で読み戻せる）
+- セーブから再開する (#1021): `field.html?resume=<0|1|2|quick>`（旧経路。現行は `/play/sit-by-me?resume=<slot>` で、キーは `name-name-save-sit-by-me-<slot>`）。localStorage のセーブ（キー `name-name-save-field-<slot>`）の `rpg` を読み、パーティ・所持品・所持金・現在地（絵・座標・向き・フラグ）・戦闘中状態（敵・HP・状態異常・ATB ゲージ・コマンド待ちの順・敵の記憶・脚本制御の戦闘の進行と `[戦闘 id]` の id）をその局面から再開する（`script.id` があれば脚本と結果の `フラグ=`/`次=` も戻る。id の無い旧セーブは通常の戦闘として続き警告を出す。#1233）。書き方・例・実機の手順は [状態を用意して起動する](./resume-demo.md)。`window.field.rpg()` が今の局面をセーブ形式で返し、`saveRpg(slot)` が書き込む（同じ形式で読み戻せる）
 - 構成: 候補窓データの組み立ては `frontend/src/field/battleMenu.ts`（`buildBattleMenu`）。テスト用フィクスチャは `frontend/src/field/__fixtures__/dummyFixture.ts`（`?fixture=dummy` の入口は #1051 で廃止）
 
 ## 内部トレースログ（`trace: on`、#1197）
@@ -407,7 +408,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 | `b.snap` | 全員の `[HP, 表示HP]`・ゲージ・キュー・窓の段数・演出中か。状態が変わったときと、戦闘中 1 秒ごと |
 | `b.end` | 戦闘の終了（結果、終了時の HP） |
 | `f.scene` / `f.move` / `f.warp` | 場面に入った / 32px のマスをまたいだ移動（毎フレームは取らない）/ ワープ |
-| `f.talk` / `f.event` | 会話・イベントの開始（`open: 1`）と終了（`open: 0`）。台詞の本文は記録しない |
+| `f.talk` / `f.event` | 会話・イベントの開始（`open: 1`）と終了（`open: 0`）。戦闘中セーブからの脚本制御の戦闘の再開では `resume: 1` が付く。台詞の本文は記録しない |
 | `f.menu` / `f.save` / `f.load` / `f.battle` | メニューの開閉、セーブ、ロード要求、戦闘の入退場 |
 | `err` | window の `error` / `unhandledrejection`（直後に同期で保存） |
 

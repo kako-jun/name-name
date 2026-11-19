@@ -1,7 +1,7 @@
 /** BattleScreen の `motion` (#956) の配線: ff の再生・サンプリングが選んだ時間の組 (default / snappy) で動く */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture, TextureSource, type Container } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, ENTRANCE_LOAD_TIMEOUT_MS, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { DEFAULT_MOTION_TIMING, SNAPPY_MOTION_TIMING } from './battleMotion'
@@ -40,7 +40,7 @@ function setup(opts: BattleScreenOptions = {}) {
   const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
   created.push(s)
   // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-  s.tick(1500)
+  s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
   s.tick(200)
   engine.selectAttack()
   ;(s as unknown as { refresh(): void }).refresh()
@@ -132,7 +132,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
     // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     engine.selectAttack()
     ;(s as unknown as { refresh(): void }).refresh()
@@ -196,7 +196,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     })
     created.push(s)
     // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     ;(s as unknown as { playback: unknown }).playback = { queue: events, active: null }
     const v = s as unknown as {
@@ -277,7 +277,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     })
     created.push(sc)
     // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-    sc.tick(1500)
+    sc.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
       queue: [ev('enemy', [hit({ target: { side: 'enemy', index: 1 } })])],
@@ -313,7 +313,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     })
     created.push(sc)
     // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-    sc.tick(1500)
+    sc.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
       queue: [ev('enemy', [hit()])],
@@ -346,8 +346,8 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     })
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
-    // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
-    s.tick(1500)
+    // 登場スライド (#1037) を済ませる（読み込み待ちの見切り ENTRANCE_LOAD_TIMEOUT_MS + 登場 200ms）。登場中は入力が塞がるため
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     const v = s as unknown as {
       enemyViews: { container: Container; baseX: number }[]
@@ -439,7 +439,7 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     })
     created.push(s)
     // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
-    s.tick(1500)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS)
     s.tick(200)
     engine.selectAttack()
     ;(s as unknown as { refresh(): void }).refresh()
@@ -589,7 +589,7 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
   const press = (key: string) =>
     globalThis.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
 
-  it('読み込みが settled しない: 1499ms は開始待ちで出発位置のまま、1500ms で見切って開始、+登場時間で終了', async () => {
+  it('読み込みが settled しない: ENTRANCE_LOAD_TIMEOUT_MS - 1 は開始待ちで出発位置のまま、ENTRANCE_LOAD_TIMEOUT_MS で見切って開始、+登場時間で終了', async () => {
     mockLoad('manual')
     const { s } = build()
     const v = views(s)
@@ -597,7 +597,7 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
     const startE = v.enemyViews[0].container.x
     const startP = v.partyViews[0].container.x
     expect(pending.length).toBeGreaterThan(0)
-    s.tick(1499)
+    s.tick(ENTRANCE_LOAD_TIMEOUT_MS - 1)
     expect(v.enemyViews[0].container.x).toBe(startE)
     expect(v.partyViews[0].container.x).toBe(startP)
     expect(blocked(s)).toBe(true)
@@ -611,7 +611,7 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
     expect(v.entranceActive).toBe(false)
   })
 
-  it('読み込みが全部済めば 1500ms を待たず、次の tick から開始する（失敗した読み込みも settled 扱い）', async () => {
+  it('読み込みが全部済めば ENTRANCE_LOAD_TIMEOUT_MS を待たず、次の tick から開始する（失敗した読み込みも settled 扱い）', async () => {
     mockLoad('manual')
     const { s } = build()
     const v = views(s)
