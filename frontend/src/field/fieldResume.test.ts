@@ -21,6 +21,7 @@ import {
   itemNamesFromConfig,
   itemsWithCounts,
   mergePartyById,
+  dropBattleOnlyState,
   snapshotParty,
   resumeFromSlotData,
 } from './fieldResume'
@@ -256,6 +257,23 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
   describe('戦闘中だけの状態 hpFloor は持ち越さない (#1222)', () => {
     const floored = [{ id: 'a', hp: 1, hpFloor: 1 }]
     const beforeFloored = { ...before, party: [{ id: 'a', hp: 20, hpFloor: 1 }] }
+    it('召喚の使用済み summoned も持ち越さない', () => {
+      const r = carryOverBattleResult({
+        outcome: 'victory',
+        earnedGold: 0,
+        menuItems: [],
+        partyAfter: [{ id: 'a', hp: 5, summoned: true } as { id: string; hp: number }],
+        before,
+      })
+      expect(r.party[0]).not.toHaveProperty('summoned')
+    })
+
+    it('dropBattleOnlyState: hpFloor / summoned を外し、ほかは残す（戦闘の局面の無い再開用）', () => {
+      const m = { id: 'a', hp: 5, hpFloor: 1, summoned: true }
+      expect(dropBattleOnlyState(m)).toEqual({ id: 'a', hp: 5 })
+      expect(dropBattleOnlyState({ id: 'b', hp: 1 })).toEqual({ id: 'b', hp: 1 })
+    })
+
     for (const outcome of ['victory', 'interrupted', 'escaped', 'defeat']) {
       it(`${outcome}: 結果の味方に hpFloor が無く、渡した値は書き換えない`, () => {
         const r = carryOverBattleResult({

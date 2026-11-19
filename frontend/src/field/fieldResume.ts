@@ -178,9 +178,19 @@ export function itemNamesFromConfig(
 }
 
 /**
+ * 戦闘中だけの状態（`hpFloor` / `summoned`。戦闘ごとに作り直すもの）を味方から外す (#1222)。渡した値を直接書き換えるので、複製に対して呼ぶ。
+ * 戦闘後の持ち越しと、戦闘の局面を持たないセーブの再開で共有する
+ */
+export function dropBattleOnlyState<P extends object>(member: P): P {
+  delete (member as { hpFloor?: number }).hpFloor
+  delete (member as { summoned?: boolean }).summoned
+  return member
+}
+
+/**
  * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数に戦利品を足し、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換え、勝利なら経験値を生存者へ配る (#206)
  * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない。
- * 戦闘中だけの状態（脚本の `固定`/`下限` が付ける `hpFloor`）は持ち越さない（残すと次の通常戦闘でも HP が下限から下がらない #1222）
+ * 戦闘中だけの状態（脚本の `固定`/`下限` が付ける `hpFloor`・召喚の使用済み `summoned`）は持ち越さない（残すと次の通常戦闘でも HP が下限から下がらない・もう よべない #1222）
  */
 export function carryOverBattleResult<P extends object>(input: {
   outcome: string
@@ -206,7 +216,7 @@ export function carryOverBattleResult<P extends object>(input: {
     (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
   )
   // 戦闘中だけの状態は持ち越さない (#1222)
-  for (const m of party) delete (m as { hpFloor?: number }).hpFloor
+  for (const m of party) dropBattleOnlyState(m)
   return {
     inventory,
     gold: input.before.gold + input.earnedGold,

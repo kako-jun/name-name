@@ -652,7 +652,7 @@ export function sampleActor(
             ? 'special'
             : 'ready'
         : 'idle'
-    // FF 式: 前へ踏み出し → 構える → 効果が着く間（castHitMs）まで前に出たまま → castMs までに戻る (#1222)。
+    // FF 式: 前へ踏み出し → 構える → 最初の効果が着く（castHitMs）まで前に出たまま → castMs までに戻る (#1222)。
     // 行動の長さ・命中の時刻は変えない（踏み出しは castHitMs までに収める）
     let forward = 0
     if (time < T.castHitMs) {
