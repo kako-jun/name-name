@@ -2444,9 +2444,11 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
     }
   })
 
-  it('占有矩形・ラベル・板の不変条件（画面内・ログ帯の重なり量・非重複・味方領域）', () => {
-    let checked = 0
-    for (const f of fixtures) {
+  // 敵の並びごとに 1 テスト (#1232)。全部を 1 テストに詰めると負荷時に 3〜4 秒かかり、既定の 5 秒に近かった
+  it.each(fixtures.map((f) => [f.name, f] as const))(
+    '%s: 占有矩形・ラベル・板の不変条件（画面内・ログ帯の重なり量・非重複・味方領域）',
+    (_name, f) => {
+      let checked = 0
       const fps = footprints(f)
       for (const [w, h] of sizes)
         for (const ov of overlaps0)
@@ -2539,9 +2541,9 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
                   expect(overlaps(labels[a], labels[b]), `${ctx} label ${a}-${b}`).toBe(false)
               checked++
             }
+      expect(checked).toBe(sizes.length * 3 * 2 * 2)
     }
-    expect(checked).toBe(fixtures.length * sizes.length * 3 * 2 * 2)
-  })
+  )
 
   // メッセージ窓の行数を固定（ff の 1 行）したときの体数不変。dq は窓が敵の数で可変なので、窓の高さが体数で変わる分だけ cell も変わる (#1178)
   it('体数不変（メッセージ窓の行数が固定のとき）: 先頭の敵の x/y/width/size（奥行きあり含む scale）・cell・logLines が体数 1〜最大で変わらない', () => {
@@ -3137,10 +3139,14 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
     const g = computeAcrylicGeometry(1, 1, box, DEFAULT_ACRYLIC_PARAMS)
     return Math.max(g.shadow?.rx ?? 0, g.base?.rx ?? 0)
   }
-  it('描画範囲どうしの隙間が 0 より大きい（画面16種 × 味方1〜4人 × 隊列 × 敵数 × 重なり × コマンド数 × ff/dq）', () => {
-    let checked = 0
-    let minGap = Infinity
-    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]]) {
+  // 画面ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 配置で 2〜4 秒かかり、並行実行や他のプロセスの負荷で
+  // 既定の 5 秒を超えて時間切れで落ちていた（配置は純関数で、結果は毎回同じ）。総当たりの組み合わせは分ける前と同じ
+  const S3_SIZES: Array<[number, number]> = [...SWEEP_SIZES, [1600, 1080]]
+  it.each(S3_SIZES)(
+    '%dx%d: 描画範囲どうしの隙間が 0 より大きい（味方1〜4人 × 隊列 × 敵数 × 縦横比 × 重なり × コマンド数 × ff/dq）',
+    (w, h) => {
+      let checked = 0
+      let minGap = Infinity
       for (const partyCount of [1, 2, 3, 4]) {
         for (const back of [false, true]) {
           for (const enemyCount of [1, 3, 6]) {
@@ -3182,9 +3188,29 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
           }
         }
       }
+      // 縦長・小さい画面は敵名窓を置けず 0 件（全部 continue）。空振りしていないことは下のテストで見る
+      if (checked > 0) expect(minGap).toBeGreaterThan(0)
     }
-    expect(checked).toBeGreaterThan(100)
-    expect(minGap).toBeGreaterThan(0)
+  )
+
+  // 分ける前は「全画面の合計件数 > 100」で総当たりの空振りを見ていた。画面ごとに分けたので、
+  // 敵名窓を置ける画面が実際にあることを、軽い代表 1 配置（味方 4・敵 3）で別に確かめる
+  it('総当たりが空振りしない: 敵名窓を置ける画面がある', () => {
+    const placed = S3_SIZES.filter(
+      ([w, h]) =>
+        computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: 4,
+          enemyCount: 3,
+          enemyList: true,
+          commandCount: 4,
+          enemyAspects: [1, 1, 1],
+          enemyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+          partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+        }).enemyList !== null
+    )
+    expect(placed.length).toBeGreaterThan(0)
   })
 })
 
@@ -3234,9 +3260,11 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
       expect(build(w, h, { align: 'bottom' }), `${w}x${h}`).toEqual(build(w, h))
   })
 
-  it('center は敵の縦位置だけを変える: 窓・舞台・味方・コマンド・ステータスは同じで、敵の x・大きさも同じ。縦は一様に上へ', () => {
-    let moved = 0
-    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]])
+  // 画面ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 組×2 配置で 3 秒前後かかり、負荷時に既定の 5 秒を超えて落ちていた
+  const CENTER_SIZES: Array<[number, number]> = [...SWEEP_SIZES, [1600, 1080]]
+  it.each(CENTER_SIZES)(
+    '%dx%d: center は敵の縦位置だけを変える: 窓・舞台・味方・コマンド・ステータスは同じで、敵の x・大きさも同じ。縦は一様に上へ',
+    (w, h) => {
       for (const party of [1, 4])
         for (const back of [false, true])
           for (const messageLines of [undefined, 1])
@@ -3270,12 +3298,22 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
                         expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
                         expect(dys[i], ctx).toBeLessThanOrEqual(EPS)
                       })
-                      if (!depth) {
-                        for (const dy of dys) expect(dy, ctx).toBeCloseTo(dys[0], 6)
-                        if (dys[0] < -1) moved++
-                      }
+                      if (!depth) for (const dy of dys) expect(dy, ctx).toBeCloseTo(dys[0], 6)
                     }
-    expect(moved).toBeGreaterThan(50)
+    }
+  )
+
+  // 分ける前は「全画面で上へ動いた件数 > 50」で空振りを見ていた。画面ごとに分けたので（320x240 は動く余地がなく 0 件）、
+  // 実際に上へ動く画面があることを、軽い代表 1 配置（味方 4・敵名窓あり・6x2・深度なし）で別に確かめる
+  it('総当たりが空振りしない: center で敵が実際に上へ動く画面がある', () => {
+    const moved = CENTER_SIZES.filter(([w, h]) => {
+      const o = { party: 4, list: true, overlap: 0.25 }
+      return (
+        build(w, h, { ...o, align: 'center' }).enemies[0].floor - build(w, h, o).enemies[0].floor <
+        -1
+      )
+    })
+    expect(moved.length).toBeGreaterThan(0)
   })
 
   it('center + 深度なし: 行数ぶんのグリッドの縦中心が、敵の領域（舞台）の縦中心に一致する（幅で決まる 6x2 / 4x2、1280x720・味方4人・ff）', () => {
