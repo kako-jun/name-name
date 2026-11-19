@@ -7,7 +7,10 @@
  * - 素の値: 一枚絵フィールドの持ち越し中の味方（`partyState`）は**装備を含まない素の値**のまま持つ（セーブもこの値）。
  *   装備込みの値は、戦闘を始めるとき・ステータスを出すときにその都度ここで作る。戦闘後の書き戻しは `removeGearStats` で、
  *   開始時に実際に足した分（`GearStatDelta`）を引いて素の値へ戻す。戦闘ごとに加算が積み上がらず、戦闘中の HP の減り・レベルアップの成長・状態は残る
- * - HP / MP: 最大値が変わった分だけ現在値も動かす（`applyMemberMagicite` と同じ規則。戻すときは逆向き）。装備しただけで回復しない・戦闘のたびに回復しない
+ * - HP / MP: 現在値は**絶対値**として持つ。装備は最大値（maxHp / maxMp）だけを変え、現在値は動かさない。
+ *   足すときは現在値を装備込みの最大値で切り詰めるだけ（装備しても回復しない）。戻すときは現在値をそのまま残す
+ *   （素の最大値を超えてよい。`partyState` の内部表現として許す）。これで 戦闘 → 戻す → 戦闘 で HP / MP が丸めなしに往復する。
+ *   装備を外して最大値が下がったときは `clampToGear` で新しい最大値まで切り詰める
  *
  * 売り物の定義が無いゲーム・何も装備していない味方は、ここを通っても値が変わらない（キーも増えない）。
  */
@@ -32,7 +35,10 @@ export interface GearStatDelta {
   atk: number
   def: number
   agi: number
-  /** 装備で通常攻撃の属性・耐性が変わったときの素の値（戻すときに書き戻す）。変わらなければ無い */
+  /**
+   * 装備で通常攻撃の属性・耐性が変わったときの素の値（戻すときに書き戻す）。変わらなければ無い。
+   * 戦闘中の属性・耐性の変化はこれで消える（現状の売り物は属性を持たない。#1235 / #1240 で属性が乗るときに見直す）
+   */
   restore?: Pick<BattleEntity, 'attackElements' | 'affinity'>
 }
 
@@ -46,6 +52,9 @@ function applyOne(
   const ids = hasOwn(equipment, base.id) ? equipment[base.id] : []
   // 人物の定義は id だけ（既定の枠: 武器・防具・盾・兜が各 1）。そうび画面の持ち替え（`memberDef`）と同じ枠で検査する
   applyMemberMagicite(entity, resolveMemberEquipment({ id: base.id }, roster, ids))
+  // 現在 HP / MP は絶対値。applyMemberMagicite が最大値の増減に合わせて動かした分を元へ戻し、装備込みの最大値で切り詰めるだけにする
+  entity.hp = Math.max(0, Math.min(base.hp, entity.maxHp))
+  entity.mp = Math.max(0, Math.min(base.mp, entity.maxMp))
   const changedElements =
     entity.attackElements !== base.attackElements || entity.affinity !== base.affinity
   return {
@@ -89,7 +98,7 @@ export function applyGearStats(
 
 /**
  * 戦闘後の味方（装備込みの値）から、開始時に足した分を引いて素の値へ戻す。`deltas` に無い人物はそのまま。
- * 最大 HP / 最大 MP が戻った分だけ現在値も動かす（倒れている者は 0 のまま。生きている者は HP 1 以上）。
+ * 現在 HP / MP は戦闘後の値のまま（素の最大値を超えてよい。次に足すとき装備込みの最大値で切り詰める）。
  * 能力値以外（状態・Lv・経験値など）は戦闘後の値のまま。渡した味方は書き換えない
  */
 export function removeGearStats(
@@ -100,16 +109,8 @@ export function removeGearStats(
     const m = structuredClone(after)
     if (!hasOwn(deltas, m.id)) return m
     const d = deltas[m.id]
-    if (d.maxHp) {
-      const maxHp = Math.max(1, m.maxHp - d.maxHp)
-      if (m.hp > 0) m.hp = Math.min(maxHp, Math.max(1, m.hp + (maxHp - m.maxHp)))
-      m.maxHp = maxHp
-    }
-    if (d.maxMp) {
-      const maxMp = Math.max(0, m.maxMp - d.maxMp)
-      m.mp = Math.min(maxMp, Math.max(0, m.mp + (maxMp - m.maxMp)))
-      m.maxMp = maxMp
-    }
+    if (d.maxHp) m.maxHp = Math.max(1, m.maxHp - d.maxHp)
+    if (d.maxMp) m.maxMp = Math.max(0, m.maxMp - d.maxMp)
     if (d.atk) m.atk = Math.max(0, m.atk - d.atk)
     if (d.def) m.def = Math.max(0, m.def - d.def)
     if (d.agi) m.agi = Math.max(0, m.agi - d.agi)
@@ -120,6 +121,20 @@ export function removeGearStats(
       if (affinity === undefined) delete m.affinity
       else m.affinity = structuredClone(affinity)
     }
+    return m
+  })
+}
+
+/**
+ * 装備を持ち替えた直後に、素の値の味方の現在 HP / MP を新しい装備込みの最大値で切り詰める（外して最大値が下がったら下がる。回復はしない）。
+ * 能力値など他の値は変えない。渡した味方は書き換えない
+ */
+export function clampToGear(party: readonly BattleEntity[], input: GearStatsInput): BattleEntity[] {
+  const { party: equipped } = applyGearStats(party, input)
+  return party.map((p, i) => {
+    const m = structuredClone(p)
+    m.hp = equipped[i].hp
+    m.mp = equipped[i].mp
     return m
   })
 }
