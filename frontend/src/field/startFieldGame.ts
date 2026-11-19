@@ -2510,6 +2510,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         // 実行器が動作中などで start が黙って何もしなかった（保留が消費されていない）ときは通常の戦闘に落とす
         if (pendingResume) {
           pendingResume = null
+          // onEnd が走っていない（eventRun が true のまま）ときだけ、先に記録した open:1 の対を閉じる（二重記録しない）
+          if (eventRun) traceRec('f.event', { id: rp.id, open: 0, resume: 1 })
           eventRun = false
           warning = `セーブの戦闘 '${rp.id}' のイベントを開始できないため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`
         } else {
