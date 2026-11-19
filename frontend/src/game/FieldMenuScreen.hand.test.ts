@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HAND_FINGER_Y_RATIO } from './battleMenuLayout'
 import { FieldMenuScreen, type FieldMenuPartyView } from './FieldMenuScreen'
 import { computeMenuLayout, type FieldMenuItemDef } from './fieldMenu'
+import { computeScreenLayout } from './fieldMenuScreens'
 import {
   FIELD_HAND_BLINK_DIM_ALPHA,
   FIELD_HAND_BLINK_PERIOD_MS,
@@ -334,5 +335,86 @@ describe('FieldMenuScreen: 指の階層と間隔 (#1223)', () => {
       expect(leftOf(t) + t.width).toBeLessThanOrEqual(slotRight + 1e-6)
     }
     for (const h of hands(s)) expectNoOverlap(h, textsOf(s))
+  })
+
+  it.each([
+    [1280, 720],
+    [390, 844],
+  ])(
+    '長いラベルのタブでも、指と文字はタブの矩形に収まり指と文字の間隔を守る (%i x %i)',
+    (width, height) => {
+      const longLabel = 'たいせつなもの・ながいラベルのタブ'
+      const items: FieldMenuItemDef[] = [
+        {
+          id: 'item',
+          label: 'どうぐ',
+          content: {
+            tabs: [
+              { label: 'つかう', action: 'use', entries: [{ label: 'ポーション', id: 'p' }] },
+              { label: longLabel, action: 'info', entries: [{ label: 'かぎ', id: 'k' }] },
+              { label: 'すてる', action: 'info', entries: [{ label: 'ごみ', id: 'g' }] },
+            ],
+          },
+        },
+      ]
+      const s = new FieldMenuScreen({ width, height, acrylic: false, onClose: () => {} })
+      s.open({
+        items,
+        party: PARTY,
+        info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+        slots: [null, null, null],
+        images: {},
+      })
+      s.tick(10_000)
+      s.dispatch({ type: 'tap', index: 0 })
+      settle(s)
+      s.dispatch({ type: 'move', dx: 1, dy: 0 }) // 長いラベルのタブへ
+      settle(s)
+      const top = computeMenuLayout(width, height, items.length, PARTY.length)
+      const sl = computeScreenLayout({
+        kind: 'item',
+        base: top.base,
+        partyCount: PARTY.length,
+        tabCount: 3,
+        listCount: 1,
+        cursor: 0,
+        reserveTimer: false,
+        confirmOpen: false,
+      })
+      const rect = sl.tabs[1]
+      const hs = hands(s)
+      expect(hs).toHaveLength(1)
+      const h = hs[0]
+      const t = textsOf(s).find((x) => x.text === longLabel)!
+      expect(t).toBeDefined()
+      expect(h.right + h.height * FIELD_HAND_GAP_RATIO).toBeLessThanOrEqual(leftOf(t) + 1e-6)
+      expect(h.left).toBeGreaterThanOrEqual(rect.x - 1e-6)
+      expect(leftOf(t) + t.width).toBeLessThanOrEqual(rect.x + rect.w + 1e-6)
+    }
+  )
+
+  it('項目画面のパーティ枠の名前の文字は、トップと同じ枠内位置のまま（絵だけが小さくなり文字は動かない）', () => {
+    const s = open()
+    const topName = textsOf(s).find((t) => t.text === 'アスカ')!
+    const topLay = computeMenuLayout(1280, 720, ITEMS.length, PARTY.length)
+    const topOffset = (topName.x - topLay.partySlots[0].x) / topLay.partySlots[0].h
+    s.dispatch({ type: 'tap', index: IDX.item })
+    settle(s)
+    s.dispatch({ type: 'confirm' })
+    s.dispatch({ type: 'confirm' })
+    settle(s)
+    const sl = computeScreenLayout({
+      kind: 'item',
+      base: topLay.base,
+      partyCount: PARTY.length,
+      tabCount: 2,
+      listCount: 1,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+    })
+    const name = textsOf(s).find((t) => t.text === 'アスカ')!
+    const slot = sl.party[0]
+    expect((name.x - slot.x) / slot.h).toBeCloseTo(topOffset, 5)
   })
 })

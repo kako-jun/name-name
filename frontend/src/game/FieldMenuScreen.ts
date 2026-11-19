@@ -704,8 +704,19 @@ export class FieldMenuScreen extends Container {
         r.y + r.h / 2,
         'center'
       )
+      // 長いラベルでも指（手の幅 + 間隔）と文字がタブの中に収まるよう、字を縮め、指の置き場の分だけ右へ寄せる
+      const tabHandH = r.h * 0.55
+      const pad = r.h * 0.15
+      const room = r.w - fieldHandLane(tabHandH) - pad * 2
+      const natural = textWidth(label)
+      if (natural > room) {
+        label.style.fontSize = Math.max(1, Number(label.style.fontSize) * (room / natural))
+        label.style.padding = Math.ceil(Number(label.style.fontSize) * 0.3)
+      }
+      const lw = textWidth(label)
+      label.x = Math.max(label.x, r.x + pad + fieldHandLane(tabHandH) + lw / 2)
       C.addChild(label)
-      anchors.set(fieldHandSlotKey('tab', i), this.textAnchor(label, r.h * 0.55))
+      anchors.set(fieldHandSlotKey('tab', i), this.textAnchor(label, tabHandH))
       if (interactive)
         this.hit(C, r, (e) => {
           if (e.button !== 2) this.dispatch({ type: 'select', target: 'tab', index: i })
@@ -1085,28 +1096,20 @@ export class FieldMenuScreen extends Container {
     if (emphasize)
       C.addChild(new Graphics().rect(r.x, r.y, r.w, r.h).fill({ color: WHITE, alpha: 0.16 }))
     const baseSize = compact ? lay.fonts.party * 0.8 : lay.fonts.party
-    // 指の置き場 (#1223)。指を出す画面（項目画面）だけ枠の左に手の幅 + 間隔を空け、絵と文字をその分右へずらす。
-    // 手の高さは文字の大きさ。トップ（項目選択中）は指を出さないので空けない
+    // 指の置き場 (#1223)。指を出す画面（項目画面）だけ枠の左に手の幅 + 間隔を空け、絵をその分右へずらして小さくする
+    // （文字は動かさない・縮めない）。手の高さは文字の大きさ。トップ（項目選択中）は指を出さないので空けない
     const handH = baseSize
     const lane = handLane ? fieldHandLane(handH) : 0
     const artX = r.x + r.h * 0.05 + lane
     // 絵は左端の正方形に収める (#1211)。台座・影が隣の枠にはみ出さない
-    this.placeFitted(art, p.texture, { x: artX, y: r.y, w: r.h * 1.2, h: r.h })
-    const tx = r.x + r.h * 1.4 + lane
+    this.placeFitted(art, p.texture, { x: artX, y: r.y, w: r.h * 1.2 - lane, h: r.h })
+    const tx = r.x + r.h * 1.4
     const right = r.x + r.w - r.h * 0.3
     const lv = p.level === undefined ? 'Lv --' : `Lv ${p.level}`
     const hp = `HP  ${p.hp} / ${p.maxHp}`
     // 「いま選択中」の表示（矢印でなくアクスタ側に出す。戦闘と同じ見方）
     const mark = emphasize ? markLabel : null
-    // 置き場を空けた枠は文字の幅が減るので、枠の右端の近くまでに収まる大きさへ縮める（収まるならそのまま）
-    const fitRight = r.x + r.w - r.h * 0.12
-    const size = handLane
-      ? Math.min(
-          fitSize(baseSize, fitRight - tx, p.name, '', baseSize * 0.5),
-          fitSize(baseSize, right - tx, lv, mark ?? '', baseSize * 0.5),
-          fitSize(baseSize, fitRight - tx, 'HP', `${p.hp} / ${p.maxHp}`, baseSize * 0.5)
-        )
-      : baseSize
+    const size = baseSize
     // 指は名前の行の縦中心で、絵の左端を指す
     const anchorAt = (cy: number): FieldHandAnchor => ({ left: artX, cy, height: handH })
     // 経験値 (#1186): 「次のレベルまで N」を最下段に 1 行足す。段が増えるので行の位置を詰め直す
@@ -1115,7 +1118,7 @@ export class FieldMenuScreen extends Container {
       const next = nextValue(exp)
       // 人物ごとに大きさが揺れないよう、値の幅は 3 桁（MAX と同じ幅）を下限に見積もる（それ以上の桁は枠からはみ出さない大きさまで縮める）
       // 狭い枠は文字の置き場が足りないので、この 1 行だけ左右を少し広く使う（左はアクスタの足元の外、右は枠の端の近く）
-      const ex = compact ? r.x + r.h * 1.2 + lane : tx
+      const ex = compact ? r.x + r.h * 1.2 : tx
       const eRight = compact ? r.x + r.w - r.h * 0.12 : right
       const fit = (v: string): number =>
         fitSize(size * 0.85, eRight - ex, NEXT_LABEL, v, size * 0.5)
