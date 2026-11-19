@@ -132,3 +132,45 @@ describe('途中再開: 敵の記憶・脚本', () => {
     expect(e.getState().script).toEqual({ id: 'boss', turn: 0, fired: [], joined: [], fled: [] })
   })
 })
+
+describe('途中再開: 脚本の上限ターン (#1233)', () => {
+  const run = (restoreTurn: number | undefined) => {
+    const e = new BattleEngine(
+      [ent('a', { hp: 5000, maxHp: 5000 })],
+      [foe('s', { hp: 5000, maxHp: 5000, atk: 1 })],
+      {
+        rng: () => 0.5,
+        script: { id: 'boss', rules: ['固定: 結果=中断 上限ターン=3'] },
+        ...(restoreTurn === undefined
+          ? {}
+          : { restore: { script: { turn: restoreTurn, fired: [], joined: [], fled: [] } } }),
+      }
+    )
+    let n = 0
+    while (!e.isOver() && n < 50) {
+      e.selectAttack()
+      n++
+    }
+    return { e, n }
+  }
+
+  it('新規は 3 ターンで中断する（基準）', () => {
+    const { e, n } = run(undefined)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(3)
+  })
+
+  it('turn=1 から再開すると、あと 2 ターンで中断する（セーブ時点から数える）', () => {
+    const { e, n } = run(1)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(2)
+    expect(e.getState().script?.turn).toBe(3)
+    expect(e.getResult()).toMatchObject({ outcome: 'interrupted' })
+  })
+
+  it('turn=2 ならあと 1 ターン', () => {
+    const { e, n } = run(2)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(1)
+  })
+})

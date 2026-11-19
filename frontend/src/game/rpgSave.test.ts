@@ -148,6 +148,48 @@ describe('parseRpgSave', () => {
   })
 })
 
+describe('battle.script.id (#1233)', () => {
+  const withScript = (id?: unknown): RpgSaveState => {
+    const s = declared()
+    s.battle!.script = {
+      ...(id === undefined ? {} : { id }),
+      turn: 1,
+      fired: [0],
+      joined: ['party2'],
+      fled: [],
+    } as NonNullable<RpgSaveState['battle']>['script']
+    return s
+  }
+
+  it('id は検証を通り、解決しても保たれ、スナップショットで元の宣言に戻る（往復）', () => {
+    const s = withScript('boss-fight')
+    const parsed = parseRpgSave(JSON.parse(JSON.stringify(s)))
+    expect(parsed.ok).toBe(true)
+    const resolved = resolveRpg(s, base)
+    expect(resolved.battle!.script).toMatchObject({ id: 'boss-fight', turn: 1 })
+    const snap = snapshotRpg(resolved, base)
+    expect(snap.battle!.script).toEqual(s.battle!.script)
+    expect(snap).toEqual(s)
+  })
+
+  it('id が無い旧セーブも通り、id キーは出てこない', () => {
+    const s = withScript()
+    expect(parseRpgSave(s).ok).toBe(true)
+    const resolved = resolveRpg(s, base)
+    expect(resolved.battle!.script).not.toHaveProperty('id')
+    expect(snapshotRpg(resolved, base).battle!.script).not.toHaveProperty('id')
+  })
+
+  it.each([[1], [null], [{}], [['a']], [true]])(
+    'id が文字列でない (%j) と理由つきで失敗する',
+    (id) => {
+      const r = parseRpgSave(withScript(id))
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(JSON.stringify(r)).toContain('battle.script.id')
+    }
+  )
+})
+
 describe('resolveRpg', () => {
   it('設定に差分を重ね、載せた順に並べ、所持品はセーブの値に置き換える', () => {
     const r = resolveRpg(declared(), base)
