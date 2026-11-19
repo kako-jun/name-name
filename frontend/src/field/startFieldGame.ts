@@ -917,7 +917,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // 装備の能力値 (#1234)。partyState は装備を含まない素の値のまま持ち（セーブもこの値）、戦闘に渡す味方とステータスの表示はここで装備を足して作る。
   // 現在 HP / MP だけは絶対値（装備込みの最大値まで回復した値が、素の maxHp / maxMp を超えて残りうる）
   const gearStatsInput = { shop: config.gearShop, equipment }
-  /** 装備込みの味方（戦闘を始めるときと同じ値。セーブスロットの表示に使う） */
+  /** 装備込みの味方（戦闘を始めるときと同じ値。メニューの `prepare` のパーティ欄・ステータスの値に使う） */
   const equippedParty = (): BattleEntity[] => applyGearStats(partyState, gearStatsInput).party
   let gold = resumed ? resumed.gold : 0
   // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps。全画面メニューを設定したゲームだけ書く）。
