@@ -56,7 +56,9 @@ export interface RpgBattleState {
   /** ATB。ゲージは 0〜1000、`queue` はコマンド待ちの味方の party index（溜まった順）。ターン制は省略 */
   atb?: { partyGauge: number[]; enemyGauge: number[]; queue: number[] }
   /** 脚本制御の戦闘の進行（経過ターン・発動済みルール・参戦・逃走）。普通の戦闘は省略 */
-  script?: Omit<ScriptState, 'id'>
+  script?: Omit<ScriptState, 'id'> &
+    /** `[戦闘 id]` の id (#1233)。再開で脚本（rules・参戦）と結果の `フラグ=`・`次=` を戻すのに使う。旧セーブには無い（通常の戦闘として再開する） */
+    Partial<Pick<ScriptState, 'id'>>
   /** 敵ごとの記憶（`行動:` を持つ敵の行動回数など）。省略は初期状態 */
   enemyMemory?: EnemyMemory[]
   /** 戦闘背景の URL（省略はシーン・既定の背景） */
@@ -232,6 +234,7 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
           return fail(`battle.script.${k} は 0 以上の整数の配列が必要です`)
       if (!Array.isArray(s.joined) || !(s.joined as unknown[]).every(isStr))
         return fail('battle.script.joined は文字列の配列が必要です')
+      if (s.id !== undefined && !isStr(s.id)) return fail('battle.script.id は文字列が必要です')
     }
     if (b.enemyMemory !== undefined) {
       if (!Array.isArray(b.enemyMemory)) return fail('battle.enemyMemory は配列が必要です')

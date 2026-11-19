@@ -24,6 +24,10 @@ import {
   dropBattleOnlyState,
   snapshotParty,
   resumeFromSlotData,
+  planResumeBattle,
+  resumeScriptedParty,
+  planScriptedResumeStart,
+  type PendingScriptedResume,
 } from './fieldResume'
 import { autoTriggers, triggerKey } from './triggerRuntime'
 import { resolveBattleBackground, type FieldTrigger } from './config'
@@ -697,5 +701,116 @@ describe('field.fireAuto と resumedStart（#1155）', () => {
     )
     expect(m).not.toBeNull()
     expect(m![0]).not.toContain('fireAuto')
+  })
+})
+
+describe('planResumeBattle (#1233)', () => {
+  const sc = (id?: string) => ({
+    script: { ...(id === undefined ? {} : { id }), turn: 1, fired: [], joined: [], fled: [] },
+  })
+  const scripts = { boss: { rules: [] } }
+
+  it('script なし（通常の戦闘）は plain・警告なし', () => {
+    const p = planResumeBattle({}, scripts)
+    expect(p).toEqual({ kind: 'plain' })
+    expect(p).not.toHaveProperty('warning')
+    expect(planResumeBattle({}, undefined)).toEqual({ kind: 'plain' })
+  })
+  it('id なしの旧セーブ（未定義・空文字）は plain + 警告', () => {
+    for (const s of [sc(), sc('')]) {
+      const p = planResumeBattle(s, scripts)
+      expect(p.kind).toBe('plain')
+      expect(p.kind === 'plain' && p.warning).toMatch(/id が無い/)
+    }
+  })
+  it('宣言に無い id は plain + 警告（宣言が全く無くても）', () => {
+    for (const b of [scripts, undefined, {}]) {
+      const p = planResumeBattle(sc('ghost'), b)
+      expect(p.kind).toBe('plain')
+      expect(p.kind === 'plain' && p.warning).toContain("'ghost'")
+    }
+  })
+  it('__proto__・toString・constructor は宣言として扱わない', () => {
+    for (const id of ['__proto__', 'toString', 'constructor', 'hasOwnProperty']) {
+      expect(planResumeBattle(sc(id), scripts).kind).toBe('plain')
+    }
+  })
+  it('宣言がある id は script', () => {
+    expect(planResumeBattle(sc('boss'), scripts)).toEqual({ kind: 'script', id: 'boss' })
+  })
+})
+
+describe('resumeScriptedParty (#1233)', () => {
+  const m = (id: string, hp: number) => ({ id, hp })
+
+  it('初期編成の順に、参戦済み（joined）を参戦順で足す。値はセーブ側（all）', () => {
+    const all = [m('c', 3), m('a', 1), m('b', 2), m('d', 4)]
+    const out = resumeScriptedParty([m('a', 99), m('b', 99)], ['d', 'c'], all)
+    expect(out).toEqual([m('a', 1), m('b', 2), m('d', 4), m('c', 3)])
+  })
+  it('joined が初期編成と重複しても二重に入れない・all に居ない id は飛ばす', () => {
+    const out = resumeScriptedParty([m('a', 99)], ['a', 'ghost', 'b', 'b'], [m('a', 1), m('b', 2)])
+    expect(out).toEqual([m('a', 1), m('b', 2)])
+  })
+  it('初期編成の者が all に居なければ初期値のまま', () => {
+    expect(resumeScriptedParty([m('a', 9)], [], [])).toEqual([m('a', 9)])
+  })
+  it('入力を書き換えず、返すものは all の複製（共有しない）', () => {
+    const initial = [m('a', 9)]
+    const all = [m('a', 1), m('b', 2)]
+    const joined = ['b']
+    const out = resumeScriptedParty(initial, joined, all)
+    expect(initial).toEqual([m('a', 9)])
+    expect(all).toEqual([m('a', 1), m('b', 2)])
+    expect(joined).toEqual(['b'])
+    expect(out[0]).not.toBe(all[0])
+    expect(out[1]).not.toBe(all[1])
+    out[0].hp = 0
+    expect(all[0].hp).toBe(1)
+  })
+})
+
+describe('planScriptedResumeStart (#1233)', () => {
+  const ent = (id: string, hp: number) => ({ id, hp }) as unknown as BattleEntity
+  const pending = (id: string): PendingScriptedResume =>
+    ({
+      id,
+      saved: {
+        enemies: [ent('slime', 7)],
+        script: { id, turn: 2, fired: [], joined: ['c'], fled: [] },
+      },
+      setup: {
+        enemies: [ent('slime', 99)],
+        party: [ent('a', 99)],
+        script: { id, rules: [] },
+      },
+    }) as unknown as PendingScriptedResume
+
+  it('id 一致: セーブの敵・セーブ、setup の脚本、参戦済みを足した味方で開く', () => {
+    const p = pending('boss')
+    const out = planScriptedResumeStart(p, 'boss', [ent('a', 1), ent('c', 3)])
+    expect(out).not.toBeNull()
+    expect(out!.enemies).toBe(p.saved.enemies)
+    expect(out!.saved).toBe(p.saved)
+    expect(out!.script).toBe(p.setup.script)
+    expect(out!.party).toEqual([ent('a', 1), ent('c', 3)])
+  })
+  it('id 不一致・保留なしは null（通常の経路へ）', () => {
+    expect(planScriptedResumeStart(pending('boss'), 'other', [])).toBeNull()
+    expect(planScriptedResumeStart(null, 'boss', [])).toBeNull()
+  })
+  it('配線の固定: startEventBattle は分岐の前に pendingResume を消す・start 後に残れば plain へ落とす（静的検査）', () => {
+    const body = startFieldGameSrc.slice(startFieldGameSrc.indexOf('const startEventBattle ='))
+    const clear = body.indexOf('pendingResume = null')
+    expect(clear).toBeGreaterThan(-1)
+    expect(clear).toBeLessThan(body.indexOf('planScriptedResumeStart('))
+    expect(startFieldGameSrc).toMatch(/if \(pendingResume\) \{\s*pendingResume = null/)
+  })
+})
+
+describe('配線の固定: 戦闘中セーブへの script.id 書き込み (#1233, 静的検査)', () => {
+  it('startFieldGame の戦闘中スナップショットは script に id を載せる', () => {
+    // startFieldGame は PixiJS 依存で結合できないため原文だけを固定する（式を変えたらここも直す）
+    expect(startFieldGameSrc).toMatch(/script: \{\s*id: st\.script\.id,\s*turn: st\.script\.turn,/)
   })
 })

@@ -109,6 +109,25 @@ describe('途中再開: 敵の記憶・脚本', () => {
     expect(bad.getState().enemyMemory).toEqual([{ acted: 0 }, { acted: 0 }])
   })
 
+  it('参戦済み（joined）の味方を含む編成でも ATB のゲージ・キュー・index が party と一致する (#1233)', () => {
+    // 劇戦闘の再開: 初期編成 a,b に参戦済みの c を参戦順で足した並び
+    const e = new BattleEngine([ent('a'), ent('b'), ent('c')], [foe('s')], {
+      rng: () => 0,
+      atb: { mode: 'wait', initialGauges: { party: [1000, 400, 1000], enemies: [0] } },
+      script: { id: 'boss', rules: [] },
+      restore: {
+        atbQueue: [2, 0],
+        script: { turn: 1, fired: [], joined: ['c'], fled: [] },
+      },
+    })
+    const st = e.getState()
+    expect(st.script!.joined).toEqual(['c'])
+    expect(st.party.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+    expect(st.atb!.partyGauge).toHaveLength(3)
+    expect(st.atb!.queue).toEqual([2, 0])
+    expect(e.getCurrentActorIndex()).toBe(2)
+  })
+
   it('脚本制御の戦闘の進行（経過ターン・発動済み）を戻す', () => {
     const e = new BattleEngine([ent('a')], [foe('s')], {
       rng: () => 0,
@@ -130,5 +149,47 @@ describe('途中再開: 敵の記憶・脚本', () => {
       script: { id: 'boss', rules: [] },
     })
     expect(e.getState().script).toEqual({ id: 'boss', turn: 0, fired: [], joined: [], fled: [] })
+  })
+})
+
+describe('途中再開: 脚本の上限ターン (#1233)', () => {
+  const run = (restoreTurn: number | undefined) => {
+    const e = new BattleEngine(
+      [ent('a', { hp: 5000, maxHp: 5000 })],
+      [foe('s', { hp: 5000, maxHp: 5000, atk: 1 })],
+      {
+        rng: () => 0.5,
+        script: { id: 'boss', rules: ['固定: 結果=中断 上限ターン=3'] },
+        ...(restoreTurn === undefined
+          ? {}
+          : { restore: { script: { turn: restoreTurn, fired: [], joined: [], fled: [] } } }),
+      }
+    )
+    let n = 0
+    while (!e.isOver() && n < 50) {
+      e.selectAttack()
+      n++
+    }
+    return { e, n }
+  }
+
+  it('新規は 3 ターンで中断する（基準）', () => {
+    const { e, n } = run(undefined)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(3)
+  })
+
+  it('turn=1 から再開すると、あと 2 ターンで中断する（セーブ時点から数える）', () => {
+    const { e, n } = run(1)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(2)
+    expect(e.getState().script?.turn).toBe(3)
+    expect(e.getResult()).toMatchObject({ outcome: 'interrupted' })
+  })
+
+  it('turn=2 ならあと 1 ターン', () => {
+    const { e, n } = run(2)
+    expect(e.getState().phase).toBe('interrupted')
+    expect(n).toBe(1)
   })
 })

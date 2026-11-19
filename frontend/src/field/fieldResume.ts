@@ -20,6 +20,8 @@ import { buildEnemyEntities } from '../game/encounter'
 import { hasOwn } from '../game/ownProperty'
 import type { BattleEngineOptions } from '../game/battleEngine'
 import type { FieldBattleConfig, FieldConfig } from './config'
+import type { BattleEntity } from '../game/spellDsl'
+import type { FieldScriptedBattleSetup } from '../game/fieldBattle'
 import { savedFormsOf } from './characterForms'
 
 /** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-<slot>` / `…-quick` */
@@ -256,4 +258,92 @@ export function snapshotParty<P extends { id: string }>(
   inBattle: boolean
 ): P[] {
   return inBattle ? mergePartyById(partyState, engineParty) : [...partyState]
+}
+
+/** 戦闘中のセーブの再開で何を開くか (#1233) */
+export type ResumeBattlePlan = { kind: 'script'; id: string } | { kind: 'plain'; warning?: string }
+
+/**
+ * 戦闘中のセーブから、脚本制御の戦闘 (`[戦闘 id]`) として開くか通常の戦闘として開くかを決める (#1233)。
+ * - `script.id` があり、脚本の宣言（`battleScripts`）にある → `script`（通常の `[戦闘: id]` と同じ経路で開く）
+ * - 通常の戦闘のセーブ（`script` なし）→ `plain`（警告なし）
+ * - 脚本の戦闘のセーブだが id が無い（旧セーブ）・宣言に無い id → `plain` + 警告（推測しない）
+ */
+export function planResumeBattle(
+  saved: Pick<RpgResolvedBattle, 'script'>,
+  battleScripts: Readonly<Record<string, unknown>> | undefined
+): ResumeBattlePlan {
+  const script = saved.script
+  if (!script) return { kind: 'plain' }
+  const id = script.id
+  if (id === undefined || id === '')
+    return {
+      kind: 'plain',
+      warning:
+        '脚本制御の戦闘のセーブですが、戦闘の id が無いため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）',
+    }
+  if (!battleScripts || !hasOwn(battleScripts, id))
+    return {
+      kind: 'plain',
+      warning: `セーブの戦闘 '${id}' の宣言（[戦闘 ${id}]）が無いため、通常の戦闘として再開しました（脚本・結果の フラグ=/次= は戻りません）`,
+    }
+  return { kind: 'script', id }
+}
+
+/**
+ * 脚本制御の戦闘を再開するときのエンジンの味方 (#1233)。初期編成（`味方:` の順）に、セーブ時点で参戦済み（`joined`）の味方を参戦順に足す。
+ * 参戦済みの者は戦闘を始めた時点ではエンジンに居ないので、ここで入れておかないと復元した `joined` と食い違う（居ないのに参戦済み）。
+ * 値は `all`（セーブから戻した味方）の同 id。居ない id は読み飛ばす。渡した値は書き換えない
+ */
+export function resumeScriptedParty<P extends { id: string }>(
+  initial: readonly P[],
+  joined: readonly string[],
+  all: readonly P[]
+): P[] {
+  const out = initial.map((p) => structuredClone(all.find((a) => a.id === p.id) ?? p))
+  for (const id of joined) {
+    if (out.some((p) => p.id === id)) continue
+    const m = all.find((a) => a.id === id)
+    if (m) out.push(structuredClone(m))
+  }
+  return out
+}
+
+/** 戦闘中のセーブから脚本制御の戦闘を再開する間だけ持つ値 (#1233)。最初の `startEventBattle(id)` が 1 回だけ使って消す */
+export interface PendingScriptedResume {
+  id: string
+  saved: RpgResolvedBattle
+  setup: FieldScriptedBattleSetup
+}
+
+/** `startBattle` に渡す引数（敵・セーブ・味方と脚本） */
+export interface ResumeBattleStart {
+  enemies: BattleEntity[]
+  saved: RpgResolvedBattle
+  party: BattleEntity[]
+  script: FieldScriptedBattleSetup['script']
+}
+
+/**
+ * `[戦闘: id]` の実行時、保留中の再開 (`pending`) を使えるか決めて `startBattle` の引数を返す (#1233)。
+ * `pending` の id が `id` と一致するときだけ引数を返し、不一致・保留なしは null（呼び出し側は通常の経路へ進む）。
+ * 呼び出し側は結果にかかわらず、この呼び出しの前に必ず `pending` を消す（1 回だけ使う）。
+ * 敵・値・ATB・脚本の進行はセーブから、脚本（rules・参戦）と初期編成は `pending.setup` から。味方は参戦済みを足した並び
+ */
+export function planScriptedResumeStart(
+  pending: PendingScriptedResume | null,
+  id: string,
+  currentParty: readonly BattleEntity[]
+): ResumeBattleStart | null {
+  if (!pending || pending.id !== id) return null
+  return {
+    enemies: pending.saved.enemies,
+    saved: pending.saved,
+    party: resumeScriptedParty(
+      pending.setup.party,
+      pending.saved.script?.joined ?? [],
+      currentParty
+    ),
+    script: pending.setup.script,
+  }
 }
