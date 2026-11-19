@@ -2157,57 +2157,57 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
       }
   })
 
-  it.each(WIDTHS)(
-    '画面サイズ総当たり 幅%d: 敵 1〜6 体 × 縦横比 × 許容量 × 奥行きで、板が画面内・同じ行の板が非重複・窓との重なりが許容量以下',
-    (W) => {
+  // 画面（幅 × 高さ）ごとに 1 テスト (#1232)。幅ごとにまとめると 1 本が負荷時に 6〜11 秒かかり、60 秒の timeout で
+  // 隠していた（S3 と同じ時間切れの型）。組み合わせは分ける前と同じ
+  it.each(WIDTHS.flatMap((W) => HEIGHTS.map((H) => [W, H] as const)))(
+    '画面サイズ総当たり %dx%d: 敵 1〜6 体 × 縦横比 × 許容量 × 奥行きで、板が画面内・同じ行の板が非重複・窓との重なりが許容量以下',
+    (W, H) => {
       const depths = [null, { horizon: 0.3, perspective: 0.8 }]
       let cases = 0
-      for (const H of HEIGHTS)
-        for (let n = 1; n <= 6; n++)
-          for (const set of ASPECT_SETS)
-            for (const overlap of [0, 0.25, 0.5])
-              for (const depth of depths) {
-                const aspects = aspectsOf(set, n)
-                const L = computeSideBattleLayout({
-                  width: W,
-                  height: H,
-                  partyCount: 4,
-                  enemyCount: n,
-                  enemyAspects: aspects,
-                  enemyAcrylic: PARAMS,
-                  enemyWindowOverlap: overlap,
-                  depth,
-                })
-                const tag = `${W}x${H} n${n} a[${set}] ov${overlap} d${depth ? 1 : 0}`
-                const plates = L.enemies.map((s, i) => computeEnemyPlateRect(s, aspects[i], PARAMS))
-                const windowBottom = L.log.y + L.log.h
-                L.enemies.forEach((s, i) => {
-                  if (!(s.size > 0)) return
-                  const r = plates[i]
-                  expect(r.x, tag).toBeGreaterThanOrEqual(L.stage.x - 1e-6)
-                  expect(r.x + r.w, tag).toBeLessThanOrEqual(L.stage.x + L.stage.w + 1e-6)
-                  expect(r.y, tag).toBeGreaterThanOrEqual(-1e-6)
-                  expect(r.y + r.h, tag).toBeLessThanOrEqual(L.stage.y + L.stage.h + 1e-6)
-                  // 窓との重なりが許容量（枠の高さ × overlap）以下
-                  expect(windowBottom - r.y, tag).toBeLessThanOrEqual(
-                    Math.min(overlap * s.size, L.log.h) + 0.02
-                  )
-                })
-                // 同じ行の隣の板と重ならない（行が違う板の上下の重なりは奥行きの重なりで、仕様）
-                for (let i = 0; i < plates.length; i++)
-                  for (let j = i + 1; j < plates.length; j++) {
-                    if (!(L.enemies[i].size > 0) || !(L.enemies[j].size > 0)) continue
-                    if (Math.abs(L.enemies[i].floor - L.enemies[j].floor) > 0.5) continue
-                    const a = plates[i]
-                    const b = plates[j]
-                    const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
-                    expect(ox, `${tag} i${i} j${j}`).toBeLessThanOrEqual(0.02)
-                  }
-                cases++
-              }
-      expect(cases).toBe(HEIGHTS.length * 6 * ASPECT_SETS.length * 3 * 2)
-    },
-    60_000
+      for (let n = 1; n <= 6; n++)
+        for (const set of ASPECT_SETS)
+          for (const overlap of [0, 0.25, 0.5])
+            for (const depth of depths) {
+              const aspects = aspectsOf(set, n)
+              const L = computeSideBattleLayout({
+                width: W,
+                height: H,
+                partyCount: 4,
+                enemyCount: n,
+                enemyAspects: aspects,
+                enemyAcrylic: PARAMS,
+                enemyWindowOverlap: overlap,
+                depth,
+              })
+              const tag = `${W}x${H} n${n} a[${set}] ov${overlap} d${depth ? 1 : 0}`
+              const plates = L.enemies.map((s, i) => computeEnemyPlateRect(s, aspects[i], PARAMS))
+              const windowBottom = L.log.y + L.log.h
+              L.enemies.forEach((s, i) => {
+                if (!(s.size > 0)) return
+                const r = plates[i]
+                expect(r.x, tag).toBeGreaterThanOrEqual(L.stage.x - 1e-6)
+                expect(r.x + r.w, tag).toBeLessThanOrEqual(L.stage.x + L.stage.w + 1e-6)
+                expect(r.y, tag).toBeGreaterThanOrEqual(-1e-6)
+                expect(r.y + r.h, tag).toBeLessThanOrEqual(L.stage.y + L.stage.h + 1e-6)
+                // 窓との重なりが許容量（枠の高さ × overlap）以下
+                expect(windowBottom - r.y, tag).toBeLessThanOrEqual(
+                  Math.min(overlap * s.size, L.log.h) + 0.02
+                )
+              })
+              // 同じ行の隣の板と重ならない（行が違う板の上下の重なりは奥行きの重なりで、仕様）
+              for (let i = 0; i < plates.length; i++)
+                for (let j = i + 1; j < plates.length; j++) {
+                  if (!(L.enemies[i].size > 0) || !(L.enemies[j].size > 0)) continue
+                  if (Math.abs(L.enemies[i].floor - L.enemies[j].floor) > 0.5) continue
+                  const a = plates[i]
+                  const b = plates[j]
+                  const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+                  expect(ox, `${tag} i${i} j${j}`).toBeLessThanOrEqual(0.02)
+                }
+              cases++
+            }
+      expect(cases).toBe(6 * ASPECT_SETS.length * 3 * 2)
+    }
   )
 })
 
@@ -2444,7 +2444,7 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
     }
   })
 
-  // 敵の並びごとに 1 テスト (#1232)。全部を 1 テストに詰めると負荷時に 3〜4 秒かかり、既定の 5 秒に近かった
+  // 敵の並びごとに 1 テスト (#1232)。全部を 1 テストに詰めると負荷時に 3.7 秒まで出て、既定の 5 秒に近かった
   it.each(fixtures.map((f) => [f.name, f] as const))(
     '%s: 占有矩形・ラベル・板の不変条件（画面内・ログ帯の重なり量・非重複・味方領域）',
     (_name, f) => {
@@ -3141,12 +3141,25 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
   }
   // 画面ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 配置で 2〜4 秒かかり、並行実行や他のプロセスの負荷で
   // 既定の 5 秒を超えて時間切れで落ちていた（配置は純関数で、結果は毎回同じ）。総当たりの組み合わせは分ける前と同じ
-  const S3_SIZES: Array<[number, number]> = [...SWEEP_SIZES, [1600, 1080]]
-  it.each(S3_SIZES)(
-    '%dx%d: 描画範囲どうしの隙間が 0 より大きい（味方1〜4人 × 隊列 × 敵数 × 縦横比 × 重なり × コマンド数 × ff/dq）',
-    (w, h) => {
+  // 3 つ目は「その画面で敵名窓が置けるか」。縦長・小さい画面は置けず全部 continue になるので、画面ごとに空振りを見る
+  // （分ける前は全画面の合計件数 > 100 で見ていて、1 画面だけ置けなくなっても気づけなかった）
+  const S3_ROWS: Array<[number, number, boolean]> = [
+    [360, 640, false],
+    [320, 568, false],
+    [800, 450, true],
+    [1280, 720, true],
+    [640, 360, true],
+    [568, 320, false],
+    [320, 240, false],
+    [1600, 1080, true],
+  ]
+  it('画面の一覧は SWEEP_SIZES + 1600x1080 と同じ', () => {
+    expect(S3_ROWS.map(([w, h]) => [w, h])).toEqual([...SWEEP_SIZES, [1600, 1080]])
+  })
+  it.each(S3_ROWS)(
+    '%dx%d（敵名窓が置ける: %s）: 描画範囲どうしの隙間が 0 より大きい（味方1〜4人 × 隊列 × 敵数 × 縦横比 × 重なり × コマンド数 × ff/dq）',
+    (w, h, placeable) => {
       let checked = 0
-      let minGap = Infinity
       for (const partyCount of [1, 2, 3, 4]) {
         for (const back of [false, true]) {
           for (const enemyCount of [1, 3, 6]) {
@@ -3179,7 +3192,6 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
                       partyLeft - enemyRight,
                       `${w}x${h} p${partyCount} e${enemyCount}`
                     ).toBeGreaterThan(0)
-                    minGap = Math.min(minGap, partyLeft - enemyRight)
                     checked++
                   }
                 }
@@ -3188,30 +3200,9 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
           }
         }
       }
-      // 縦長・小さい画面は敵名窓を置けず 0 件（全部 continue）。空振りしていないことは下のテストで見る
-      if (checked > 0) expect(minGap).toBeGreaterThan(0)
+      expect(checked > 0, `${w}x${h} 敵名窓が置けた件数 ${checked}`).toBe(placeable)
     }
   )
-
-  // 分ける前は「全画面の合計件数 > 100」で総当たりの空振りを見ていた。画面ごとに分けたので、
-  // 敵名窓を置ける画面が実際にあることを、軽い代表 1 配置（味方 4・敵 3）で別に確かめる
-  it('総当たりが空振りしない: 敵名窓を置ける画面がある', () => {
-    const placed = S3_SIZES.filter(
-      ([w, h]) =>
-        computeSideBattleLayout({
-          width: w,
-          height: h,
-          partyCount: 4,
-          enemyCount: 3,
-          enemyList: true,
-          commandCount: 4,
-          enemyAspects: [1, 1, 1],
-          enemyAcrylic: DEFAULT_ACRYLIC_PARAMS,
-          partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
-        }).enemyList !== null
-    )
-    expect(placed.length).toBeGreaterThan(0)
-  })
 })
 
 describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#1178)', () => {
@@ -3261,10 +3252,25 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
   })
 
   // 画面ごとに 1 テスト (#1232)。全画面を 1 テストに詰めると 4,608 組×2 配置で 3 秒前後かかり、負荷時に既定の 5 秒を超えて落ちていた
-  const CENTER_SIZES: Array<[number, number]> = [...SWEEP_SIZES, [1600, 1080]]
-  it.each(CENTER_SIZES)(
-    '%dx%d: center は敵の縦位置だけを変える: 窓・舞台・味方・コマンド・ステータスは同じで、敵の x・大きさも同じ。縦は一様に上へ',
-    (w, h) => {
+  // 3 つ目は「その画面で center が敵を実際に上へ動かす組み合わせがあるか」。320x240 は動く余地がなく 0 件なので、
+  // 画面ごとに空振りを見る（分ける前は全画面の合計 > 50 で見ていて、1 画面だけ動かなくなっても気づけなかった）
+  const CENTER_ROWS: Array<[number, number, boolean]> = [
+    [360, 640, true],
+    [320, 568, true],
+    [800, 450, true],
+    [1280, 720, true],
+    [640, 360, true],
+    [568, 320, true],
+    [320, 240, false],
+    [1600, 1080, true],
+  ]
+  it('画面の一覧は SWEEP_SIZES + 1600x1080 と同じ', () => {
+    expect(CENTER_ROWS.map(([w, h]) => [w, h])).toEqual([...SWEEP_SIZES, [1600, 1080]])
+  })
+  it.each(CENTER_ROWS)(
+    '%dx%d（上へ動く組み合わせがある: %s）: center は敵の縦位置だけを変える: 窓・舞台・味方・コマンド・ステータスは同じで、敵の x・大きさも同じ。縦は一様に上へ',
+    (w, h, expectMoved) => {
+      let moved = 0
       for (const party of [1, 4])
         for (const back of [false, true])
           for (const messageLines of [undefined, 1])
@@ -3298,23 +3304,14 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
                         expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
                         expect(dys[i], ctx).toBeLessThanOrEqual(EPS)
                       })
-                      if (!depth) for (const dy of dys) expect(dy, ctx).toBeCloseTo(dys[0], 6)
+                      if (!depth) {
+                        for (const dy of dys) expect(dy, ctx).toBeCloseTo(dys[0], 6)
+                        if (dys[0] < -1) moved++
+                      }
                     }
+      expect(moved > 0, `${w}x${h} 上へ動いた件数 ${moved}`).toBe(expectMoved)
     }
   )
-
-  // 分ける前は「全画面で上へ動いた件数 > 50」で空振りを見ていた。画面ごとに分けたので（320x240 は動く余地がなく 0 件）、
-  // 実際に上へ動く画面があることを、軽い代表 1 配置（味方 4・敵名窓あり・6x2・深度なし）で別に確かめる
-  it('総当たりが空振りしない: center で敵が実際に上へ動く画面がある', () => {
-    const moved = CENTER_SIZES.filter(([w, h]) => {
-      const o = { party: 4, list: true, overlap: 0.25 }
-      return (
-        build(w, h, { ...o, align: 'center' }).enemies[0].floor - build(w, h, o).enemies[0].floor <
-        -1
-      )
-    })
-    expect(moved.length).toBeGreaterThan(0)
-  })
 
   it('center + 深度なし: 行数ぶんのグリッドの縦中心が、敵の領域（舞台）の縦中心に一致する（幅で決まる 6x2 / 4x2、1280x720・味方4人・ff）', () => {
     for (const grid of [
