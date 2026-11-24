@@ -21,10 +21,10 @@ export function normalizeSpriteStyle(raw: string | null | undefined): SpriteStyl
   return raw?.trim().toLowerCase() === 'acrylic' ? 'acrylic' : 'none'
 }
 
-/** 台座の奥側の縁の見せ方 (#1187)。`same` は手前と同じ濃さ（既定・従来どおり）、`thin` は奥側を薄くして透けて見える表現にする */
+/** 台座の奥側の縁の見せ方 (#1187)。`same` は奥を薄くしない（既定・従来どおり）、`thin` は奥側を薄くして透けて見える表現にする（輪郭は手前の弧が受け持つ） */
 export type BaseBackEdge = 'same' | 'thin'
 
-/** `thin` のときの奥側の縁の濃さ（手前に対する倍率）。実画面で比べて決めた値 (#1187) */
+/** `thin` のときの奥側の縁の濃さ（その点の元の濃さに対する倍率）。実画面で比べて決めた値 (#1187) */
 export const THIN_BASE_BACK_EDGE_ALPHA = 0.2
 
 /** frontmatter `sprite_style_base_back_edge` の値を正規化する。`'thin'` 以外（未指定・空・未知値含む）は `'same'` */
@@ -69,7 +69,7 @@ export interface AcrylicParams {
   baseSideAlpha: number
   /** 台座の板の差し込み口（スリット）の暗さ（0〜1）(#760) */
   slitAlpha: number
-  /** 台座の上面の縁の線のうち、奥側の弧の濃さ（手前の弧に対する倍率。0〜1）(#1187)。1 = 手前と同じ（既定・従来どおり）、小さいほど透明な台座の向こう側が透けて見える薄い線になる */
+  /** 台座の上面の縁の線のうち、奥側の弧の濃さ（その点の元の濃さに対する倍率。0〜1）(#1187)。1 = 薄くしない（既定・従来どおり）、小さいほど透明な台座の向こう側が透けて見える薄い線になり、その分だけ手前の弧が濃くなる（`acrylicBase.ts` の `rimStrength`） */
   baseBackEdgeAlpha: number
   /** 地面に落とすアクスタ本体の影の不透明度（0〜1）(#760) */
   castAlpha: number

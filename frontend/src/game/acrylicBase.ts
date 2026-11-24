@@ -5,8 +5,10 @@
  * 構成（光は板と同じく左上から）:
  *   - 接地の柔らかい影: 台座の足元の楕円を、縁へ向けてぼかして落とす
  *   - 側面の厚み: 上面の楕円を下へ `baseThicknessRatio * ry` だけ押し出した帯。上面より少し濃い透明で、下端に明るい縁
- *   - 上面: ごく薄い白〜水色の透明面（背景がうっすら透ける）。縁に細いハイライト（左上を強く・右下を弱く）。
- *     奥側の弧は `baseBackEdgeAlpha` 倍の薄い線にできる（透明な台座の向こう側が透けて見える。既定 1 = 手前と同じ）(#1187)
+ *   - 上面: ごく薄い白〜水色の透明面（背景がうっすら透ける）。縁に細いハイライト（左上を強く・右下を弱く。
+ *     光が左上なので、既定では奥側の弧が明るく、手前の弧は弱い）。
+ *     奥側の弧は `baseBackEdgeAlpha` 倍の薄い線にできる（透明な台座の向こう側が透けて見える。既定 1 = 従来どおり）(#1187)。
+ *     薄くした分だけ、手前の弧を奥の弧の元の明るさへ寄せる（縁の明るい側を薄くするだけだと台座の輪郭が消えるため。`rimStrength`）
  *   - 板の差し込み口: 上面の奥側に細いスリット（暗い透明＋手前側の縁に明るい線）
  *
  * 座標系は上面の楕円の中心 (cx, cyTop) 基準。出力は RGBA 非プリマルチ。影は上面ではなく足元（cyTop + 厚み）中心。
@@ -97,6 +99,30 @@ export function backEdgeFactor(ny: number, backAlpha: number): number {
   return 1 - (1 - backAlpha) * back
 }
 
+/** 光の向き（左上から）。上面の縁のハイライトの強弱に使う */
+const LIGHT = [-Math.SQRT1_2, -Math.SQRT1_2] as const
+
+/** 縁上の点（外向きの単位ベクトル `ux`, `uy`）の、光によるハイライトの強さ（0.25〜1。左上が強い） */
+function rimLight(ux: number, uy: number): number {
+  const lit = clamp01((ux * LIGHT[0] + uy * LIGHT[1]) * 0.5 + 0.5)
+  return 0.25 + 0.75 * lit * lit
+}
+
+/**
+ * 上面の縁の線の強さ（`lineAlpha` に掛ける値）。`ux`, `uy` は縁上の点の向き（楕円の中心から、半径で割って正規化した
+ * 単位ベクトル。`uy` は上＝奥が負）。`backAlpha` は奥側の弧の倍率（`baseBackEdgeAlpha`）。
+ *
+ * - `backAlpha` が 1 なら光のハイライトそのまま（従来どおり。光が左上なので奥の弧が明るく、手前の弧は弱い）
+ * - 1 未満のとき、奥側は `backEdgeFactor` 倍に薄くし、手前側は「同じ横位置の奥の弧の元の明るさ」へ `1 - backAlpha` の割合で寄せる。
+ *   奥だけ薄くすると、明るい側が消えて弱い手前の弧しか残らず、台座の輪郭が見えなくなるため（sit-by-me #326）。
+ *   薄くした線のぶん、輪郭は手前の弧が受け持つ。横の端（`uy` = 0）では両側が同じ値でつながる
+ */
+export function rimStrength(ux: number, uy: number, backAlpha: number): number {
+  const own = rimLight(ux, uy)
+  if (uy <= 0) return own * backEdgeFactor(uy, backAlpha)
+  return own + (rimLight(ux, -uy) - own) * (1 - backAlpha)
+}
+
 export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster {
   const L = computeBaseLayout(texW, params)
   const { width: W, height: H, cx, cyTop, rx, ry, thickness: t, shadowRx } = L
@@ -110,7 +136,6 @@ export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster 
   ] as const
   const FILL = [0.9, 0.96, 1] as const
   const SLIT = [0.16, 0.22, 0.3] as const
-  const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2]
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const px = x + 0.5
@@ -153,14 +178,10 @@ export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster 
         const nx = dx / rx
         const ny = (py - cyTop) / ry
         const nl = Math.hypot(nx, ny) || 1
-        const lit = clamp01(((nx / nl) * lx + (ny / nl) * ly) * 0.5 + 0.5)
         const ring = smooth(0.9, 0.99, qTop) * coverTop
         over(
           rimC,
-          params.lineAlpha *
-            ring *
-            (0.25 + 0.75 * lit * lit) *
-            backEdgeFactor(ny / nl, params.baseBackEdgeAlpha)
+          params.lineAlpha * ring * rimStrength(nx / nl, ny / nl, params.baseBackEdgeAlpha)
         )
         // 4) 板の差し込み口: 奥側の細いスリット（暗い透明 + 手前側の縁に明るい線）
         const sy = computeSlitY(cyTop, ry)
