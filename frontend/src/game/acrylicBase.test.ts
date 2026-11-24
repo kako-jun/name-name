@@ -4,6 +4,7 @@ import {
   SLIT_CENTER_RATIO,
   computeBaseLayout,
   backEdgeFactor,
+  rimStrength,
   computeSlitY,
   renderAcrylicBase,
 } from './acrylicBase'
@@ -271,18 +272,50 @@ describe('台座の奥側の縁を薄くする (#1187)', () => {
     expect(b.rgba.length).toBe(a.rgba.length)
     expect(b.rgba.every((v, i) => v === a.rgba[i])).toBe(true)
   })
-  it('thin は奥側の縁だけ薄くなり、手前側の縁・形は変わらない', () => {
+  it('rimStrength: 倍率 1 は光のハイライトそのまま（奥の弧が明るく、手前の弧は弱い）', () => {
+    // 光は左上から。真奥は明るく、真手前は弱い（#1187 の前提「手前も奥も同じ濃さ」は誤りだった。sit-by-me #326）
+    expect(rimStrength(0, -1, 1)).toBeGreaterThan(rimStrength(0, 1, 1) * 2)
+    expect(rimStrength(0, 1, 1)).toBeCloseTo(0.25 + 0.75 * (0.5 - Math.SQRT1_2 / 2) ** 2, 12)
+  })
+  it('rimStrength: 奥を薄くしても、手前の弧が輪郭を受け持つ（台座が見えなくならない。sit-by-me #326）', () => {
+    const a = 0.2
+    for (const ux of [-0.9, -0.5, 0, 0.5, 0.9]) {
+      const uy = Math.sqrt(1 - ux * ux)
+      // 奥側: 元の明るさの a 倍（薄くする意図は保つ）
+      expect(rimStrength(ux, -uy, a)).toBeCloseTo(
+        rimStrength(ux, -uy, 1) * backEdgeFactor(-uy, a),
+        12
+      )
+      // 手前側: 元より弱くならず、同じ横位置の奥の弧の元の明るさは超えない
+      expect(rimStrength(ux, uy, a)).toBeGreaterThanOrEqual(rimStrength(ux, uy, 1))
+      expect(rimStrength(ux, uy, a)).toBeLessThanOrEqual(rimStrength(ux, -uy, 1) + 1e-12)
+      // 手前の弧は奥の弧（薄くした後）よりはっきり濃い
+      if (uy > 0.3) expect(rimStrength(ux, uy, a)).toBeGreaterThan(rimStrength(ux, -uy, a) * 2)
+    }
+    // 真手前は、真奥の元の明るさへ 1 - a の割合で寄る
+    const own = rimStrength(0, 1, 1)
+    expect(rimStrength(0, 1, a)).toBeCloseTo(own + (rimStrength(0, -1, 1) - own) * (1 - a), 12)
+    // 横の端で奥側と手前側がつながる（段差なし）
+    for (const ux of [-1, 1]) {
+      expect(rimStrength(ux, 1e-9, a)).toBeCloseTo(rimStrength(ux, -1e-9, a), 6)
+      expect(rimStrength(ux, 0, a)).toBe(rimStrength(ux, 0, 1))
+    }
+  })
+  it('thin は奥側の縁が薄くなり、手前側の縁は濃くなって輪郭が残る。形は変わらない', () => {
     const same = ring(1)
     const thin = ring(0.2)
     const { cx, cyTop, rx, ry } = same
     // 真奥の縁（上端）は薄くなる
     const backY = cyTop - ry * 0.97
     expect(at(thin, cx, backY)).toBeLessThan(at(same, cx, backY))
-    // 真手前の縁（下端）は同じ
+    // 真手前の縁（下端）は従来より濃く、薄くした奥の縁よりも濃い（輪郭は手前が受け持つ。sit-by-me #326）
     const frontY = cyTop + ry * 0.97
-    expect(at(thin, cx, frontY)).toBe(at(same, cx, frontY))
-    // 左右の端（中心線上）も同じ
-    expect(at(thin, cx - rx * 0.97, cyTop)).toBe(at(same, cx - rx * 0.97, cyTop))
+    expect(at(thin, cx, frontY)).toBeGreaterThan(at(same, cx, frontY))
+    expect(at(thin, cx, frontY)).toBeGreaterThan(at(thin, cx, backY))
+    // 左右の端（中心線上）はほぼ同じ（画素の中心が中心線から半画素ずれるぶんの差だけ）
+    expect(
+      Math.abs(at(thin, cx - rx * 0.97, cyTop) - at(same, cx - rx * 0.97, cyTop))
+    ).toBeLessThanOrEqual(2)
     // 寸法（位置・大きさ）は変わらない
     expect([thin.width, thin.height, thin.cx, thin.cyTop, thin.rx, thin.ry]).toEqual([
       same.width,
